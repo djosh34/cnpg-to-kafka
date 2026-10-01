@@ -55,9 +55,11 @@ Routine PR acceptance must replay the checked-in real recording, without
 installing k3s or CNPG. Test setup alone provisions disposable services, topic
 and sample schema. The acceptance workflow must print consumed, Avro-decoded
 Collector events and upload `decoded-events.jsonl`, including available output
-on failed end-to-end runs. Actual capture, passing replay-based Actions, and
-final-image CVE scan results are still pending; workflow descriptions are not
-completion claims.
+on failed end-to-end runs. The recording's deliberate capture run is linked in
+[replay documentation](docs/replay.md). Passing replay-based Actions and final-image
+CVE acceptance are not yet established; workflow descriptions are not completion
+claims. See [local real-broker acceptance](docs/operations.md#local-real-broker-acceptance)
+for the Compose/replay test commands.
 
 ## Inspect Kafka events
 

@@ -39,7 +39,9 @@ jobs:
           CNPG_COLLECTOR_BIN: ${{ github.workspace }}/bin/cnpg-to-kafka
           CNPG_RECORDING: ${{ github.workspace }}/testdata/capture/operations.jsonl
           CNPG_DECODED_EVENTS: ${{ github.workspace }}/decoded-events.jsonl
-        run: go test -p 1 -mod=readonly -v -count=1 -timeout=10m ./integration
+        run: |
+          go test -p 1 -mod=readonly -list '^TestRealReplay$' ./integration | grep -Fx TestRealReplay
+          go test -p 1 -mod=readonly -v -count=1 -run '^TestRealReplay$' -timeout=10m ./integration
       - name: Show available consumed and Avro-decoded Kafka events
         if: always()
         run: |

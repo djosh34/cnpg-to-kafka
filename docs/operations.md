@@ -22,7 +22,11 @@ Native filelog/container parsing supplies pod-path metadata and handles CRI
 fragments and rotation. Native JSON parsing/filtering selects the connection
 categories and normalizes only the mapper's `role`, `hostname`, `eventtype` and
 `database` attributes. There is no Kubernetes metadata lookup, API enrichment,
-whole-record validator or reverse DNS.
+whole-record validator or reverse DNS. For the pinned v0.162 container parser,
+`max_concurrent_files: 1` and `max_batches: 0` serialize native file polling to
+avoid its shared timestamp-parser state race. Unlimited batches still visit all
+matching files: this is a throughput tradeoff, not a narrower source selection
+or a custom parser/lock. Retain it until an upstream fix is verified.
 
 ### Registry and Kafka
 
@@ -107,6 +111,53 @@ bytes or runtime config are baked into the scratch image. The ConfigMap uses a
 `subPath` mount, so replace/restart the pod after a configuration update. Restart
 after replacing certificates too: the Collector loads TLS/registry state at
 startup rather than promising live credential reload.
+
+## Local real-broker acceptance
+
+Use Linux amd64, the Go version in `go.mod`, Docker with Compose v2, Bash,
+OpenSSL, curl, and jq. This uses one disposable Redpanda container and its built-in
+registry with generated file-only Kafka TLS/registry mTLS identities. It never
+installs k3s or refreshes the recording. Ports `19092` and `18081` must be free;
+do not run competing Compose projects on those fixed ports.
+
+From the repository root:
+
+```sh
+mkdir -p bin
+CGO_ENABLED=0 go build -p 1 -o bin/cnpg-to-kafka ./cmd/collector
+bash scripts/e2e-setup.sh cnpg-e2e
+CNPG_E2E=1 \
+  CNPG_COLLECTOR_BIN="$PWD/bin/cnpg-to-kafka" \
+  CNPG_RECORDING="$PWD/testdata/capture/operations.jsonl" \
+  CNPG_DECODED_EVENTS="$PWD/decoded-events.jsonl" \
+  go test -p 1 -v -count=1 -run '^TestRealReplay$' -timeout=10m ./integration
+```
+
+The opt-in test starts the actual Collector before applying the canonical real
+filesystem recording. Test-only native polling (`10ms`) and replay speed `5`
+allow observation of early rotations; source fixtures are not injected into a
+parser. The test constructs temporary native YAML/storage paths, consumes Kafka,
+checks framing, and Avro-decodes the resulting records. Supplemental synthetic
+edge cases are separate from the canonical recording. The native queue's focused
+saturation/restart tests remain in the ordinary Go test suite.
+
+Decoded events go both to the test console and `decoded-events.jsonl` as they
+are consumed, retaining available output on failure. The PR workflow uploads
+only that JSONL file, including failed runs; it does not upload TLS keys. The
+existing inspector example in the README uses the same native YAML as a running
+Collector; for local services, its YAML must reference `localhost:19092`,
+`https://localhost:18081`, and the generated `integration/.certs` files.
+
+Setup alone creates the disposable topic and sample schema. Repeating setup
+preserves its existing CA; to discard test state, stop the services first:
+
+```sh
+docker compose -p cnpg-e2e -f integration/compose.yaml down -v
+# Optional, after stopping the broker: remove generated test identities.
+rm -rf integration/.certs
+```
+
+These are usage instructions, not a claim of passing acceptance or publication.
 
 ## Durability and shutdown
 
