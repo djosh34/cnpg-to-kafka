@@ -7,9 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -146,7 +149,7 @@ func TestRealReplay(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte(replacements.Replace(string(configSource))), 0600))
 		return path
 	}
-	start := func(t *testing.T, config string) func() {
+	start := func(t *testing.T, config string) func(bool) {
 		t.Helper()
 		log, err := os.CreateTemp(filepath.Dir(config), "collector-*.log")
 		require.NoError(t, err)
@@ -185,13 +188,23 @@ func TestRealReplay(t *testing.T) {
 			time.Sleep(50 * time.Millisecond)
 		}
 		require.True(t, ready, "Collector readiness: %s", logPath)
-		return func() {
+		return func(abrupt bool) {
 			t.Helper()
-			require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+			signal := syscall.SIGTERM
+			if abrupt {
+				signal = syscall.SIGKILL
+			}
+			require.NoError(t, cmd.Process.Signal(signal))
 			select {
 			case err := <-done:
 				stopped = true
-				require.NoError(t, err, "clean shutdown must succeed, not be killed")
+				if abrupt {
+					var exit *exec.ExitError
+					require.ErrorAs(t, err, &exit)
+					require.Equal(t, syscall.SIGKILL, exit.Sys().(syscall.WaitStatus).Signal())
+				} else {
+					require.NoError(t, err, "clean shutdown must succeed, not be killed")
+				}
 			case <-time.After(10 * time.Second):
 				t.Fatal("normal clean shutdown exceeded 10s")
 			}
@@ -230,10 +243,10 @@ func TestRealReplay(t *testing.T) {
 			// really generated two records. Do not deduplicate or halve them.
 			require.Equal(t, map[string]int{"included/LOGIN": 17, "included/LOGOUT": 17,
 				"included/LOGIN_FAILED": 28, "excluded/LOGIN_FAILED": 28, "unknown_role/LOGIN_FAILED": 28}, counts)
-			stop()
+			stop(false)
 			stop = start(t, config)
 			require.Empty(t, collect(t, 3*time.Second), "persisted offsets: clean restart must not replay old logs")
-			stop()
+			stop(false)
 		})
 	}
 
@@ -242,6 +255,16 @@ func TestRealReplay(t *testing.T) {
 		pods := filepath.Join(dir, "pods")
 		require.NoError(t, os.Mkdir(pods, 0700))
 		config := makeConfig(t, dir, "^cnpg-synthetic$", "1")
+		// Native telemetry lets this test wait for successful queue acceptance,
+		// not guess that a sleep or source write means the fsync queue is complete.
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		port := listener.Addr().(*net.TCPAddr).Port
+		require.NoError(t, listener.Close())
+		configBytes, err := os.ReadFile(config)
+		require.NoError(t, err)
+		metricsConfig := fmt.Sprintf("metrics:\n      level: normal\n      readers:\n        - pull:\n            exporter:\n              prometheus:\n                host: 127.0.0.1\n                port: %d", port)
+		require.NoError(t, os.WriteFile(config, []byte(strings.Replace(string(configBytes), "metrics:\n      level: none", metricsConfig, 1)), 0600))
 		path := filepath.Join(pods, "capture_cnpg-synthetic_00000000-0000-0000-0000-000000000001", "postgres", "0.log")
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0700))
 		// These are expressly invented edge cases, separate from real capture.
@@ -279,9 +302,10 @@ func TestRealReplay(t *testing.T) {
 			{Role: "excluded", Hostname: "10.0.0.1", EventType: "LOGIN_FAILED"},
 			{EventType: "LOGIN_FAILED"},
 		}, events)
-		stop()
+		stop(false)
 		stop = start(t, config)
 		require.Empty(t, collect(t, 3*time.Second))
+		t.Cleanup(func() { compose(t, "start", "--wait", "--wait-timeout", "150", "redpanda") })
 		compose(t, "stop", "-t", "5", "redpanda")
 		// The loaded schema is still usable while the single broker AND registry
 		// are down. Native retry/persistent queue own buffering, not our code.
@@ -295,6 +319,82 @@ func TestRealReplay(t *testing.T) {
 		for i, e := range events {
 			require.Equal(t, avroprocessor.Event{Role: "included", Hostname: "10.0.0.2", EventType: "LOGIN", Context: avroprocessor.EventContext{Database: fmt.Sprintf("outage-%d", i)}}, e)
 		}
-		stop()
+		// A second outage deliberately kills the actual Collector, leaving its
+		// fsync queue and source-offset databases intact. Complete CRI lines only;
+		// accepted at-least-once duplicates are not mistaken for data loss.
+		compose(t, "stop", "-t", "5", "redpanda")
+		for i := 0; i < 40; i++ {
+			appendLines(line("included", "10.0.0.3:321", fmt.Sprintf("crash-%d", i), "connection authorized: crash", "LOG", "00000"))
+			// Separate native poll batches so one request is in flight while
+			// other complete requests remain queued; telemetry below proves acceptance.
+			time.Sleep(20 * time.Millisecond)
+		}
+		metricsClient := &http.Client{Timeout: time.Second}
+		deadline := time.Now().Add(15 * time.Second)
+		queued := false
+		var metrics string
+		for time.Now().Before(deadline) {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/metrics", port), nil)
+			require.NoError(t, err)
+			resp, err := metricsClient.Do(req)
+			if err == nil {
+				data, readErr := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				require.NoError(t, readErr)
+				metrics = string(data)
+				accepted, size := float64(0), float64(0)
+				for _, row := range strings.Split(metrics, "\n") {
+					fields := strings.Fields(row)
+					if len(fields) < 2 || strings.HasPrefix(row, "#") {
+						continue
+					}
+					value, err := strconv.ParseFloat(fields[1], 64)
+					require.NoError(t, err)
+					if strings.HasPrefix(fields[0], "otelcol_receiver_accepted_log_records") {
+						accepted += value
+					}
+					if strings.HasPrefix(fields[0], "otelcol_exporter_queue_size") {
+						size += value
+					}
+				}
+				queued = accepted >= 80 && size > 0 // 40 prior outage + 40 crash records since restart.
+			}
+			cancel()
+			if queued {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		require.True(t, queued, "all complete records must enter the native persistent queue before SIGKILL:\n%s", metrics)
+		stop(true)
+		compose(t, "start", "--wait", "--wait-timeout", "150", "redpanda")
+		// One container supplies both services. Registry readiness must be restored
+		// before new Collector startup performs its one read-only schema lookup.
+		deadline = time.Now().Add(30 * time.Second)
+		for {
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			_, err := avroprocessor.LoadSchema(ctx, regConfig)
+			cancel()
+			if err == nil {
+				break
+			}
+			require.True(t, time.Now().Before(deadline), "registry recovery: %v", err)
+			time.Sleep(100 * time.Millisecond)
+		}
+		stop = start(t, config)
+		events = collect(t, 5*time.Second)
+		seen := map[string]bool{}
+		for _, event := range events {
+			require.Equal(t, "included", event.Role)
+			require.Equal(t, "10.0.0.3", event.Hostname)
+			require.Equal(t, "LOGIN", event.EventType)
+			seen[event.Context.Database] = true
+		}
+		require.Len(t, seen, 40, "complete durably queued records survive actual process death; duplicates accepted")
+		for i := 0; i < 40; i++ {
+			require.True(t, seen[fmt.Sprintf("crash-%d", i)])
+		}
+		stop(false)
 	})
 }
