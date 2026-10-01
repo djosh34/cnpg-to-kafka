@@ -36,8 +36,9 @@ versions, change global caches, or commit generated vendor sources.
 
 ## One build/test path
 
-Requires the pinned Go toolchain and standard GNU `patch` (Ubuntu CI and the
-Debian Go builder provide it):
+Requires the pinned Go toolchain and standard GNU `patch`. Ubuntu CI provides
+`patch`; the Docker build stage explicitly installs it (it is not included in
+the selected Go builder image):
 
 ```sh
 ./scripts/prepare-go.sh
