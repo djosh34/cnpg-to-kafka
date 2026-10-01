@@ -9,7 +9,11 @@ receivers:
     include_file_path: true
     storage: file_storage
     max_log_size: 1MiB
-    max_concurrent_files: 128
+    # v0.162's native container parser has shared timestamp state: serialize
+    # reads to avoid its multi-reader race. All matched files are still polled
+    # in successive batches; zero max_batches means no per-poll source limit.
+    max_concurrent_files: 1
+    max_batches: 0
     poll_interval: 200ms
     retry_on_failure:
       enabled: true
