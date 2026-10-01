@@ -45,12 +45,16 @@ func settings() otelcol.CollectorSettings {
 }
 
 func factories() (otelcol.Factories, error) {
-	filelog := filelogreceiver.NewFactory()
+	// Preserve the upstream filelog alias for the canonical file_log type.
+	receivers, err := otelcol.MakeFactoryMap[receiver.Factory](filelogreceiver.NewFactory())
+	if err != nil {
+		return otelcol.Factories{}, err
+	}
 	avro := avroprocessor.NewFactory()
 	kafka := kafkaexporter.NewFactory()
 	storage := filestorage.NewFactory()
 	return otelcol.Factories{
-		Receivers:  map[component.Type]receiver.Factory{filelog.Type(): filelog},
+		Receivers:  receivers,
 		Processors: map[component.Type]processor.Factory{avro.Type(): avro},
 		Exporters:  map[component.Type]exporter.Factory{kafka.Type(): kafka},
 		Extensions: map[component.Type]extension.Factory{storage.Type(): storage},

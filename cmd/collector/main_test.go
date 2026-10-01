@@ -15,7 +15,8 @@ func TestMinimalFactories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(f.Receivers) != 1 || f.Receivers[component.MustNewType("filelog")] == nil {
+	if len(f.Receivers) != 2 || f.Receivers[component.MustNewType("file_log")] == nil ||
+		f.Receivers[component.MustNewType("filelog")] == nil {
 		t.Fatalf("unexpected receivers: %v", f.Receivers)
 	}
 	if len(f.Processors) != 1 || f.Processors[component.MustNewType("avro")] == nil {
