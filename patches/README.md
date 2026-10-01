@@ -53,7 +53,10 @@ TLS, registry, Kafka, filesystem replay and end-to-end tests remain required.
 
 A clean scanner exit alone is insufficient. Before completion, inspect the
 Linux/amd64 runtime import graph and actual binary build information: **no
-x/crypto package/module may be linked**. The unchanged final-image Trivy JSON
+external `golang.org/x/crypto` package/module may be linked**. GOROOT's internal
+`vendor/golang.org/x/crypto/...` packages are part of the Go standard library
+(`Standard=true`, no external Module), remain needed for native TLS, and are
+scanned honestly with the Go toolchain version. The unchanged final-image Trivy JSON
 `--list-all-pkgs` inventory must still contain the original configtls v1.68.0 and
 internal/kafka v0.162.0 identities and versions. Their canonical base versions
 remain conservatively scanned despite these disclosed changes. Retire these
