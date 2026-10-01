@@ -57,8 +57,10 @@ func LoadSchema(ctx context.Context, cfg RegistryConfig) (registry.SchemaInfo, e
 				version, _ := strconv.Atoi(cfg.Version) // validated above
 				info, err = client.GetSchemaInfo(ctx, cfg.Subject, version)
 			}
-			if err == nil && (info.ID < 0 || uint64(info.ID) > math.MaxUint32) {
-				err = fmt.Errorf("schema ID %d is outside uint32", info.ID)
+			// Registry IDs are positive; zero also catches an omitted JSON ID,
+			// which the library otherwise decodes to the int zero value.
+			if err == nil && (info.ID <= 0 || uint64(info.ID) > math.MaxUint32) {
+				err = fmt.Errorf("schema ID %d is missing or outside positive uint32", info.ID)
 			}
 		}
 		if err == nil {

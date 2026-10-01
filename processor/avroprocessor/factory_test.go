@@ -29,6 +29,22 @@ func TestProcessorFramesNestedEventsAndPreservesRetryInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Deliberately change schema field order at the registry. An encoder using
+	// the checked-in example instead of the fetched schema would decode wrongly.
+	var fetchedSchema struct {
+		Type      string            `json:"type"`
+		Name      string            `json:"name"`
+		Namespace string            `json:"namespace"`
+		Fields    []json.RawMessage `json:"fields"`
+	}
+	if err := json.Unmarshal(schemaBytes, &fetchedSchema); err != nil {
+		t.Fatal(err)
+	}
+	fetchedSchema.Fields[0], fetchedSchema.Fields[3] = fetchedSchema.Fields[3], fetchedSchema.Fields[0]
+	schemaBytes, err = json.Marshal(fetchedSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
 	schema, err := avro.Parse(string(schemaBytes))
 	if err != nil {
 		t.Fatal(err)
