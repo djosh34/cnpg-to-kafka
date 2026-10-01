@@ -1,0 +1,174 @@
+--- a/go.opentelemetry.io/collector/config/configtls/configtls.go
++++ b/go.opentelemetry.io/collector/config/configtls/configtls.go
+@@ -72,6 +72,9 @@
+ }
+ 
+ func (c Config) Validate() error {
++	if c.TPMConfig.Enabled {
++		return errors.New("TPM is not supported by this file-only TLS distribution")
++	}
+ 	if c.hasCAFile() && c.hasCAPem() {
+ 		return errors.New("provide either a CA file or the PEM-encoded string, but not both")
+ 	}
+@@ -260,6 +263,9 @@
+ }
+ 
+ func (c Config) loadCertificate() (tls.Certificate, error) {
++	if c.TPMConfig.Enabled {
++		return tls.Certificate{}, errors.New("TPM is not supported by this file-only TLS distribution")
++	}
+ 	switch {
+ 	case c.hasCert() != c.hasKey():
+ 		return tls.Certificate{}, errors.New("for auth via TLS, provide both certificate and key, or neither")
+@@ -291,14 +297,6 @@
+ 		keyPem = []byte(c.KeyPem)
+ 	}
+ 
+-	if c.TPMConfig.Enabled {
+-		certificate, errTPM := c.TPMConfig.tpmCertificate(keyPem, certPem, openTPM(c.TPMConfig.Path))
+-		if errTPM != nil {
+-			return tls.Certificate{}, fmt.Errorf("failed to load private key from TPM: %w", errTPM)
+-		}
+-		return certificate, nil
+-	}
+-
+ 	certificate, errKeyPair := tls.X509KeyPair(certPem, keyPem)
+ 	if errKeyPair != nil {
+ 		return tls.Certificate{}, fmt.Errorf("failed to load TLS cert and key PEMs: %w", errKeyPair)
+--- a/go.opentelemetry.io/collector/config/configtls/tpm.go
++++ /dev/null
+@@ -1,44 +0,0 @@
+-// Copyright The OpenTelemetry Authors
+-// SPDX-License-Identifier: Apache-2.0
+-
+-package configtls // import "go.opentelemetry.io/collector/config/configtls"
+-
+-import (
+-	"crypto/tls"
+-	"crypto/x509"
+-	"encoding/pem"
+-	"fmt"
+-
+-	tpmkeyfile "github.com/foxboron/go-tpm-keyfiles"
+-	"github.com/google/go-tpm/tpm2/transport"
+-)
+-
+-func (c TPMConfig) tpmCertificate(keyPem, certPem []byte, openTPM func() (transport.TPMCloser, error)) (tls.Certificate, error) {
+-	tpm, err := openTPM()
+-	if err != nil {
+-		return tls.Certificate{}, err
+-	}
+-
+-	tpmKey, err := tpmkeyfile.Decode(keyPem)
+-	if err != nil {
+-		return tls.Certificate{}, fmt.Errorf("failed to load TPM key: %w", err)
+-	}
+-
+-	tpmSigner, err := tpmKey.Signer(tpm, []byte(c.OwnerAuth), []byte(c.Auth))
+-	if err != nil {
+-		return tls.Certificate{}, fmt.Errorf("failed to load TPM signer: %w", err)
+-	}
+-
+-	certDER, _ := pem.Decode(certPem)
+-	x509Cert, err := x509.ParseCertificate(certDER.Bytes)
+-	if err != nil {
+-		return tls.Certificate{}, fmt.Errorf("failed to parse certificate: %w", err)
+-	}
+-	return tls.Certificate{
+-		Certificate: [][]byte{
+-			x509Cert.Raw,
+-		},
+-		Leaf:       x509Cert,
+-		PrivateKey: tpmSigner,
+-	}, nil
+-}
+--- a/go.opentelemetry.io/collector/config/configtls/tpm_open_linux.go
++++ /dev/null
+@@ -1,34 +0,0 @@
+-// Copyright The OpenTelemetry Authors
+-// SPDX-License-Identifier: Apache-2.0
+-
+-//go:build linux
+-
+-package configtls // import "go.opentelemetry.io/collector/config/configtls"
+-
+-import (
+-	"errors"
+-	"fmt"
+-
+-	"github.com/google/go-tpm/tpm2/transport"
+-	"github.com/google/go-tpm/tpmutil"
+-)
+-
+-// for testing
+-var tpmSimulator transport.TPMCloser
+-
+-func openTPM(path string) func() (transport.TPMCloser, error) {
+-	return func() (transport.TPMCloser, error) {
+-		if path == "" {
+-			return nil, errors.New("TPM path is not set")
+-		}
+-		if path == "simulator" {
+-			return tpmSimulator, nil
+-		}
+-
+-		tpm, err := tpmutil.OpenTPM(path)
+-		if err != nil {
+-			return nil, fmt.Errorf("failed to open TPM (%s): %w", path, err)
+-		}
+-		return transport.FromReadWriteCloser(tpm), nil
+-	}
+-}
+--- a/go.opentelemetry.io/collector/config/configtls/tpm_open_others.go
++++ /dev/null
+@@ -1,24 +0,0 @@
+-// Copyright The OpenTelemetry Authors
+-// SPDX-License-Identifier: Apache-2.0
+-
+-//go:build !linux && !windows
+-
+-package configtls // import "go.opentelemetry.io/collector/config/configtls"
+-
+-import (
+-	"errors"
+-
+-	"github.com/google/go-tpm/tpm2/transport"
+-)
+-
+-// for testing
+-var tpmSimulator transport.TPMCloser
+-
+-func openTPM(path string) func() (transport.TPMCloser, error) {
+-	return func() (transport.TPMCloser, error) {
+-		if path == "simulator" {
+-			return tpmSimulator, nil
+-		}
+-		return nil, errors.New("TPM is not supported on this platform")
+-	}
+-}
+--- a/go.opentelemetry.io/collector/config/configtls/tpm_open_windows.go
++++ /dev/null
+@@ -1,23 +0,0 @@
+-// Copyright The OpenTelemetry Authors
+-// SPDX-License-Identifier: Apache-2.0
+-
+-//go:build windows
+-
+-package configtls // import "go.opentelemetry.io/collector/config/configtls"
+-
+-import (
+-	"fmt"
+-
+-	"github.com/google/go-tpm/tpm2/transport"
+-	"github.com/google/go-tpm/tpmutil"
+-)
+-
+-func openTPM(_ string) func() (transport.TPMCloser, error) {
+-	return func() (transport.TPMCloser, error) {
+-		tpm, err := tpmutil.OpenTPM()
+-		if err != nil {
+-			return nil, fmt.Errorf("failed to open TPM: %w", err)
+-		}
+-		return transport.FromReadWriteCloser(tpm), nil
+-	}
+-}

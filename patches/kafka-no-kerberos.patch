@@ -1,0 +1,66 @@
+--- a/github.com/open-telemetry/opentelemetry-collector-contrib/internal/kafka/franz_client.go
++++ b/github.com/open-telemetry/opentelemetry-collector-contrib/internal/kafka/franz_client.go
+@@ -13,15 +13,11 @@
+ 	"time"
+ 
+ 	"github.com/aws/aws-msk-iam-sasl-signer-go/signer"
+-	krb5client "github.com/jcmturner/gokrb5/v8/client"
+-	krb5config "github.com/jcmturner/gokrb5/v8/config"
+-	"github.com/jcmturner/gokrb5/v8/keytab"
+ 	"github.com/twmb/franz-go/pkg/kadm"
+ 	"github.com/twmb/franz-go/pkg/kgo"
+ 	"github.com/twmb/franz-go/pkg/kmsg"
+ 	"github.com/twmb/franz-go/pkg/kversion"
+ 	"github.com/twmb/franz-go/pkg/sasl"
+-	"github.com/twmb/franz-go/pkg/sasl/kerberos"
+ 	"github.com/twmb/franz-go/pkg/sasl/oauth"
+ 	"github.com/twmb/franz-go/pkg/sasl/plain"
+ 	"github.com/twmb/franz-go/pkg/sasl/scram"
+@@ -311,11 +307,7 @@
+ 		opts = append(opts, saslOpt)
+ 	}
+ 	if clientCfg.Authentication.Kerberos != nil {
+-		opt, err := configureKgoKerberos(clientCfg.Authentication.Kerberos)
+-		if err != nil {
+-			return nil, fmt.Errorf("failed to configure Kerberos: %w", err)
+-		}
+-		opts = append(opts, opt)
++		return nil, errors.New("Kerberos is not supported by this TLS Kafka distribution")
+ 	}
+ 	// Configure client ID
+ 	if clientCfg.ClientID != "" {
+@@ -418,34 +410,6 @@
+ 	return kgo.SASL(m), nil
+ }
+ 
+-func configureKgoKerberos(cfg *configkafka.KerberosConfig) (kgo.Opt, error) {
+-	kAuth := kerberos.Auth{Service: cfg.ServiceName}
+-	commonCfg := krb5config.New()
+-	if cfg.ConfigPath != "" {
+-		c, err := krb5config.Load(cfg.ConfigPath)
+-		if err != nil {
+-			return nil, err
+-		}
+-		commonCfg = c
+-	}
+-
+-	disableFAST := krb5client.DisablePAFXFAST(cfg.DisablePAFXFAST)
+-	if cfg.KeyTabPath != "" {
+-		kt, err := keytab.Load(cfg.KeyTabPath)
+-		if err != nil {
+-			return nil, err
+-		}
+-		kAuth.Client = krb5client.NewWithKeytab(
+-			cfg.Username, cfg.Realm, kt, commonCfg, disableFAST,
+-		)
+-	} else {
+-		kAuth.Client = krb5client.NewWithPassword(
+-			cfg.Username, cfg.Realm, cfg.Password, commonCfg, disableFAST,
+-		)
+-	}
+-	return kgo.SASL(kAuth.AsMechanism()), nil
+-}
+-
+ func compressionCodec(compression string) kgo.CompressionCodec {
+ 	switch compression {
+ 	case "gzip":
