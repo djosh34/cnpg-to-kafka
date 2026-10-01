@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/djosh34/cnpg-to-kafka/internal/tlspolicy"
 	"go.opentelemetry.io/collector/config/configtls"
 )
 
@@ -42,9 +43,5 @@ func (c RegistryConfig) Validate() error {
 	if c.TLS.CAFile == "" || c.TLS.CertFile == "" || c.TLS.KeyFile == "" {
 		return errors.New("registry mTLS requires ca_file, cert_file and key_file")
 	}
-	if c.TLS.Insecure || c.TLS.InsecureSkipVerify || c.TLS.IncludeSystemCACertsPool ||
-		c.TLS.CAPem != "" || c.TLS.CertPem != "" || c.TLS.KeyPem != "" || c.TLS.TPMConfig.Enabled {
-		return errors.New("registry TLS requires verified peers and file-only trust/identity, without system CA fallback")
-	}
-	return nil
+	return tlspolicy.ValidateClient(&c.TLS)
 }
