@@ -1,0 +1,41 @@
+services:
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.2
+    # Test-only broker: root can read the host's mode-0600 synthetic keys.
+    user: "0:0"
+    # rpk start rewrites its config; keep the checked-in input read-only.
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - >-
+        cp /input/redpanda.yaml /etc/redpanda/redpanda.yaml;
+        exec rpk redpanda start --config /etc/redpanda/redpanda.yaml
+        --mode dev-container --smp 1 --memory 1G --reserve-memory 0M
+        --overprovisioned --check=false
+    ports:
+      - "127.0.0.1:19092:19092"
+      - "127.0.0.1:18081:8081"
+    volumes:
+      - ./redpanda.yaml:/input/redpanda.yaml:ro
+      - ./.certs:/certs:ro
+      - redpanda-data:/var/lib/redpanda/data
+    healthcheck:
+      test:
+        - CMD
+        - rpk
+        - cluster
+        - info
+        - -X
+        - brokers=localhost:19092
+        - --tls-truststore
+        - /certs/ca.crt
+        - --tls-cert
+        - /certs/client.crt
+        - --tls-key
+        - /certs/client.key
+      interval: 2s
+      timeout: 5s
+      retries: 60
+    cpus: 1
+    mem_limit: 1536m
+volumes:
+  redpanda-data:
