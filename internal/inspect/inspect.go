@@ -10,6 +10,7 @@ import (
 	"io"
 
 	"github.com/confluentinc/confluent-avro-go/v2/registry"
+	"github.com/djosh34/cnpg-to-kafka/internal/tlspolicy"
 	"github.com/djosh34/cnpg-to-kafka/processor/avroprocessor"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/kafka/configkafka"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -131,11 +132,8 @@ func loadConfig(ctx context.Context, path string) (configkafka.ClientConfig, str
 	if !ok || topic == "" || len(kafka.Brokers) == 0 {
 		return kafka, "", avro, errors.New("exporters.kafka/cnpg requires brokers and logs.topic")
 	}
-	tls := kafka.TLS
-	if tls == nil || tls.CAFile == "" || tls.CertFile == "" || tls.KeyFile == "" ||
-		tls.Insecure || tls.InsecureSkipVerify || tls.IncludeSystemCACertsPool ||
-		tls.CAPem != "" || tls.CertPem != "" || tls.KeyPem != "" || tls.TPMConfig.Enabled {
-		return kafka, "", avro, errors.New("Kafka requires verified file-only mTLS without system CA fallback")
+	if err := tlspolicy.ValidateClient(kafka.TLS); err != nil {
+		return kafka, "", avro, fmt.Errorf("Kafka TLS: %w", err)
 	}
 	return kafka, topic, avro, nil
 }
