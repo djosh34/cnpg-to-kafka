@@ -1,5 +1,7 @@
 # syntax=docker/dockerfile:1
 FROM --platform=$BUILDPLATFORM golang:1.27.1-bookworm AS build
+RUN apt-get update && apt-get install -y --no-install-recommends patch \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 ENV GOTOOLCHAIN=local GOMAXPROCS=2
 COPY . .
