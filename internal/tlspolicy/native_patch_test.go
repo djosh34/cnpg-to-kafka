@@ -29,7 +29,6 @@ func TestNativePatchRejectsKerberos(t *testing.T) {
 	cfg := factory.CreateDefaultConfig().(*kafkaexporter.Config)
 	cfg.ClientConfig.Brokers = []string{"127.0.0.1:1"}
 	cfg.ClientConfig.Authentication.Kerberos = &configkafka.KerberosConfig{}
-	cfg.QueueBatchConfig.Get().Enabled = false
 	cfg.Logs.Encoding = "raw"
 	exp, err := factory.CreateLogs(t.Context(), exportertest.NewNopSettings(factory.Type()), cfg)
 	if err != nil {
