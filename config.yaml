@@ -34,12 +34,23 @@ receivers:
         id: postgres-records
         expr: 'body.logger != "postgres" or body.record == nil'
         on_error: drop
-      # SQLSTATE class 28 denotes explicit authentication/access rejection,
-      # not arbitrary FATAL errors. Receipt/authentication progress is ignored.
+      # Explicit authentication failures (class 28), or a narrowly recognized
+      # database CONNECT denial (42501), not arbitrary FATAL/permission errors.
+      # Receipt/authentication progress is ignored; replication authorization
+      # is also a successful login unless its exact role is excluded.
       - type: add
         id: classify
         field: attributes.eventtype
-        value: 'EXPR(body.record.error_severity == "FATAL" and body.record.sql_state_code in ["28P01", "28000"] ? "LOGIN_FAILED" : body.record.message != nil and body.record.message startsWith "connection authorized:" ? "LOGIN" : body.record.message != nil and body.record.message startsWith "disconnection:" ? "LOGOUT" : "")'
+        value: >-
+          EXPR(body.record.error_severity == "FATAL" and
+          (body.record.sql_state_code in ["28P01", "28000"] or
+          (body.record.sql_state_code == "42501" and body.record.message != nil and
+          body.record.message startsWith "permission denied for database "))
+          ? "LOGIN_FAILED" : body.record.message != nil and
+          (body.record.message startsWith "connection authorized:" or
+          body.record.message startsWith "replication connection authorized:")
+          ? "LOGIN" : body.record.message != nil and
+          body.record.message startsWith "disconnection:" ? "LOGOUT" : "")
         on_error: drop
       - type: filter
         id: connection-events
