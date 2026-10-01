@@ -39,6 +39,11 @@ func settings() otelcol.CollectorSettings {
 				URIs:              []string{"file:/etc/cnpg-to-kafka/config.yaml"},
 				DefaultScheme:     "file",
 				ProviderFactories: []confmap.ProviderFactory{fileprovider.NewFactory()},
+				ConverterFactories: []confmap.ConverterFactory{
+					confmap.NewConverterFactory(func(confmap.ConverterSettings) confmap.Converter {
+						return kafkaTLSValidator{}
+					}),
+				},
 			},
 		},
 	}
