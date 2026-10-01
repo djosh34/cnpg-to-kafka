@@ -87,7 +87,7 @@ processors:
         ca_file: /etc/cnpg-to-kafka/tls/ca.crt
         cert_file: /etc/cnpg-to-kafka/tls/tls.crt
         key_file: /etc/cnpg-to-kafka/tls/tls.key
-        include_system_ca_certs: false
+        include_system_ca_certs_pool: false
         insecure: false
         insecure_skip_verify: false
 
@@ -102,7 +102,7 @@ exporters:
       ca_file: /etc/cnpg-to-kafka/tls/ca.crt
       cert_file: /etc/cnpg-to-kafka/tls/tls.crt
       key_file: /etc/cnpg-to-kafka/tls/tls.key
-      include_system_ca_certs: false
+      include_system_ca_certs_pool: false
       insecure: false
       insecure_skip_verify: false
     producer:
