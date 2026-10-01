@@ -49,7 +49,9 @@ replication durability. A socket write is not acknowledged delivery.
 
 TLS trust roots, client certificate and key are mounted files. Configure an
 explicit CA for Kafka and registry; there is no bundled/default/system-root
-fallback or disabled peer verification. Ensure the certificates' names match the
+fallback or disabled peer verification. The native TLS flag is
+`include_system_ca_certs_pool: false`; this does not replace the required
+`ca_file`. Ensure the certificates' names match the
 configured endpoints. If the two services use different trust roots, provide
 explicitly configured trust files as appropriate; do not enable insecure TLS to
 work around a mismatch. Never commit client private keys.
