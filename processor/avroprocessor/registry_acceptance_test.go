@@ -72,7 +72,7 @@ func TestRegistryLatestAndFixedLookup(t *testing.T) {
 func TestRegistryOrderedFallback(t *testing.T) {
 	clientTLS, serverTLS := registryTestTLS(t)
 	_, untrustedTLS := registryTestTLS(t)
-	for _, failure := range []string{"transport", "TLS", "400", "503", "response JSON", "Avro schema", "timeout"} {
+	for _, failure := range []string{"transport", "TLS", "400", "503", "response JSON", "Avro schema", "omitted ID", "negative ID", "oversized ID", "timeout"} {
 		t.Run(failure, func(t *testing.T) {
 			attempts := make(chan string, 3)
 			badTLS := serverTLS
@@ -90,6 +90,12 @@ func TestRegistryOrderedFallback(t *testing.T) {
 					_, _ = io.WriteString(w, "not JSON")
 				case "Avro schema":
 					_, _ = io.WriteString(w, `{"id":73,"version":7,"schema":"not an Avro schema"}`)
+				case "omitted ID":
+					_, _ = io.WriteString(w, `{"version":7,"schema":"\"string\""}`)
+				case "negative ID":
+					_, _ = io.WriteString(w, `{"id":-1,"version":7,"schema":"\"string\""}`)
+				case "oversized ID":
+					_, _ = io.WriteString(w, `{"id":4294967296,"version":7,"schema":"\"string\""}`)
 				case "timeout":
 					<-r.Context().Done()
 				default:
@@ -249,6 +255,44 @@ func TestRegistryFileOnlyMutualTLS(t *testing.T) {
 	}
 	if calls.Load() != 0 {
 		t.Fatalf("untrusted or invalid configuration made %d HTTP calls", calls.Load())
+	}
+}
+
+func TestRegistryRequiredStartupConfiguration(t *testing.T) {
+	clientTLS, serverTLS := registryTestTLS(t)
+	var calls atomic.Int32
+	server := registryTestServer(t, serverTLS, func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		writeRegistrySchema(w)
+	})
+	for _, invalid := range []string{"no URLs", "no subject", "no version", "zero version", "negative version", "noninteger version", "zero timeout", "negative timeout"} {
+		t.Run(invalid, func(t *testing.T) {
+			cfg := registryTestConfig(clientTLS, server.URL)
+			switch invalid {
+			case "no URLs":
+				cfg.URLs = nil
+			case "no subject":
+				cfg.Subject = ""
+			case "no version":
+				cfg.Version = ""
+			case "zero version":
+				cfg.Version = "0"
+			case "negative version":
+				cfg.Version = "-1"
+			case "noninteger version":
+				cfg.Version = "1.5"
+			case "zero timeout":
+				cfg.RequestTimeout = 0
+			case "negative timeout":
+				cfg.RequestTimeout = -time.Second
+			}
+			if _, err := avroprocessor.LoadSchema(context.Background(), cfg); err == nil {
+				t.Fatal("invalid startup configuration accepted")
+			}
+		})
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("invalid configuration made %d registry requests", calls.Load())
 	}
 }
 
