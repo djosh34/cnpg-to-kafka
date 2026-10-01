@@ -12,8 +12,11 @@ A database role whose successful logins and logouts must not generate connection
 _Avoid_: Filtered role (ambiguous about inclusion versus exclusion)
 
 **Client host**:
-The source host of a database connection, as reported in the CNPG connection log. This is what the sample event's `hostname` means, not the database pod or Kubernetes node.
+The source hostname or IP address of a database connection, as reported in the CNPG connection log. This is what the sample event's `hostname` means, not the database pod or Kubernetes node.
 _Avoid_: Server hostname
+
+**Selected source**:
+Pod logs in the configured namespace, optionally narrowed by a pod-name regular expression. Selection does not imply membership verified through a CNPG cluster label.
 
 **Capture run**:
 An observation of a real k3s environment containing CNPG primary and replica pods, connection activity, and unrelated pods, used to establish actual pod-log filesystem behavior.
