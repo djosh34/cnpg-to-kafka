@@ -129,7 +129,7 @@ func loadConfig(ctx context.Context, path string) (configkafka.ClientConfig, str
 		return kafka, "", avro, err
 	}
 	topic, ok := kafkaConf.Get("logs::topic").(string)
-	if !ok || topic == "" || len(kafka.Brokers) == 0 {
+	if !ok || topic == "" || !kafkaConf.IsSet("brokers") || len(kafka.Brokers) == 0 {
 		return kafka, "", avro, errors.New("exporters.kafka/cnpg requires brokers and logs.topic")
 	}
 	if err := tlspolicy.ValidateClient(kafka.TLS); err != nil {
