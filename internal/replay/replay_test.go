@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -13,7 +14,7 @@ import (
 	"time"
 )
 
-// These are synthetic producer unit tests, not the canonical real capture.
+// recording encodes operations for producer tests without changing their bytes.
 func recording(t *testing.T, ops ...Operation) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
@@ -26,7 +27,7 @@ func recording(t *testing.T, ops ...Operation) *bytes.Buffer {
 }
 
 func TestFilesystemRotationAndRepeatability(t *testing.T) {
-	// Include partial writes and non-UTF8 bytes to check byte-for-byte replay.
+	// Synthetic operations, not the canonical real capture. Include partial writes and non-UTF8 bytes to check byte-for-byte replay.
 	first := []byte("2026-01-01T00:00:00Z stdout P {\"message\":")
 	last := append([]byte("\"login\"}\n"), 0xff, 0x00)
 	ops := []Operation{
@@ -143,5 +144,91 @@ func TestCancellation(t *testing.T) {
 	cancelNow()
 	if err := Run(ctx, root, recording(t, Operation{Op: "mkdir", Path: "pod"}), 0); !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, want canceled", err)
+	}
+}
+
+func TestCapturedRotationAndRepeatability(t *testing.T) {
+	// The unchanged recording from Actions run 36935054571, not synthetic data.
+	file, err := os.Open("../../testdata/capture/operations.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(file)
+	var ops []Operation
+	for {
+		var op Operation
+		err := decoder.Decode(&op)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		ops = append(ops, op)
+	}
+	const primary = "capture_cnpg-1_71e8b938-6988-4cda-b345-6535925ff1d8/postgres/0.log"
+	const rotated = primary + ".20261001-222908"
+	rotation, postAppend := -1, -1
+	for i, op := range ops {
+		if op.Op == "rename" && op.Path == primary && op.To == rotated {
+			rotation = i // Observed at 39374ms, followed by a new empty 0.log.
+		}
+		if rotation >= 0 && op.Op == "append" && op.Path == primary {
+			postAppend = i // Observed at 45369ms: the first 514-byte append.
+			break
+		}
+	}
+	if rotation < 0 || postAppend < 0 {
+		t.Fatal("captured primary rotation/post-rotation write missing")
+	}
+	read := func(root, path string) []byte {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	var previous [][]byte
+	for pass := 0; pass < 2; pass++ {
+		root := t.TempDir()
+		run := func(segment []Operation) {
+			t.Helper()
+			if err := Run(context.Background(), root, recording(t, segment...), 0); err != nil {
+				t.Fatal(err)
+			}
+		}
+		run(ops[:rotation])
+		before := read(root, primary)
+		if len(before) == 0 {
+			t.Fatal("pre-rotation file empty")
+		}
+		run(ops[rotation : postAppend+1])
+		if !bytes.Equal(read(root, rotated), before) {
+			t.Fatal("rename did not preserve captured bytes")
+		}
+		if !bytes.Equal(read(root, primary), ops[postAppend].Data) {
+			t.Fatal("post-rotation bytes not written into new active file")
+		}
+		run(ops[postAppend+1:])
+		// Compare ordinary resulting files across two fresh roots, including the
+		// controlled replica restart's 1.log and unrelated namespace's noise.
+		var current [][]byte
+		for _, path := range []string{
+			primary,
+			"capture_cnpg-2_911c9452-da88-44cc-bdc5-cf232336a834/postgres/1.log",
+			"other_noise_672788e2-0a34-46bc-9398-0267f4713ba8/noise/0.log",
+		} {
+			current = append(current, read(root, path))
+		}
+		if pass > 0 {
+			for i := range current {
+				if !bytes.Equal(current[i], previous[i]) {
+					t.Fatalf("repeated capture replay differs for file %d", i)
+				}
+			}
+		}
+		previous = current
 	}
 }
