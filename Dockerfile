@@ -3,9 +3,9 @@ FROM --platform=$BUILDPLATFORM golang:1.27.1-bookworm AS build
 WORKDIR /src
 ENV GOTOOLCHAIN=local GOMAXPROCS=2
 COPY . .
-RUN go mod download
+RUN ./scripts/prepare-go.sh
 RUN --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -p 1 -mod=readonly \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -p 1 -mod=vendor \
     -trimpath -ldflags="-s -w" -o /out/cnpg-to-kafka ./cmd/collector
 
 FROM scratch
