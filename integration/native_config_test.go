@@ -112,6 +112,37 @@ func TestNativeConfigOptionalPodRegex(t *testing.T) {
 	assertNativeEvents(t, got, []map[string]string{nativeAttrs("LOGIN", "alice", "10.2.3.4", "")})
 }
 
+// Exercise real CRI partial writes and a filesystem rename/new-file rotation.
+// This remains supplemental synthetic input, not fabricated capture evidence.
+func TestNativeConfigCRIFragmentsAndRotation(t *testing.T) {
+	root := t.TempDir()
+	path := writeNativeCRI(t, root, "database", "cnpg-1", "0.log", []string{`{"logger":"postgres","record":{"message":"connection authorized:","user_name":"before","connection_from":"10.2.3.4:42"}}`})
+	got := make(chan map[string]string, 8)
+	stop := startNativeReceiver(t, root, t.TempDir(), ".*", got)
+	defer stop()
+	assertNativeEvents(t, got, []map[string]string{nativeAttrs("LOGIN", "before", "10.2.3.4", "")})
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+	mustNative(t, err)
+	_, err = fmt.Fprintln(f, `2026-10-01T12:00:00.000000000Z stdout P {"logger":"postgres","record":{"message":"disconnection:",`)
+	mustNative(t, err)
+	mustNative(t, f.Close())
+	// An incomplete CRI record must not produce an event.
+	select {
+	case event := <-got:
+		t.Fatalf("incomplete fragment emitted: %#v", event)
+	case <-time.After(100 * time.Millisecond):
+	}
+	f, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+	mustNative(t, err)
+	_, err = fmt.Fprintln(f, `2026-10-01T12:00:00.000000000Z stdout F "user_name":"fragment","connection_from":"[2001:db8::1]:42"}}`)
+	mustNative(t, err)
+	mustNative(t, f.Close())
+	assertNativeEvents(t, got, []map[string]string{nativeAttrs("LOGOUT", "fragment", "2001:db8::1", "")})
+	mustNative(t, os.Rename(path, path+".20261001-120000"))
+	writeNativeCRI(t, root, "database", "cnpg-1", "0.log", []string{`{"logger":"postgres","record":{"message":"connection authorized:","user_name":"after-rotation","connection_from":"10.2.3.5:42"}}`})
+	assertNativeEvents(t, got, []map[string]string{nativeAttrs("LOGIN", "after-rotation", "10.2.3.5", "")})
+}
+
 func nativeAttrs(event, role, host, database string) map[string]string {
 	return map[string]string{"eventtype": event, "role": role, "hostname": host, "database": database}
 }
