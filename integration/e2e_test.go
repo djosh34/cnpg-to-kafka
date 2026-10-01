@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/confluentinc/confluent-avro-go/v2/registry"
+	"github.com/djosh34/cnpg-to-kafka/internal/inspect"
 	"github.com/djosh34/cnpg-to-kafka/internal/replay"
 	"github.com/djosh34/cnpg-to-kafka/processor/avroprocessor"
 	"github.com/stretchr/testify/require"
@@ -25,11 +25,12 @@ import (
 
 // Opt-in: setup alone provisions the disposable topic/schema. Neither the
 // Collector nor this read-only consumer provisions production objects.
-func TestReplayE2E(t *testing.T) {
-	binaryPath := os.Getenv("CNPG_E2E_BINARY")
-	if binaryPath == "" {
-		t.Skip("set CNPG_E2E_BINARY after scripts/e2e-setup.sh to run real Redpanda acceptance")
+func TestRealReplay(t *testing.T) {
+	if os.Getenv("CNPG_E2E") != "1" {
+		t.Skip("set CNPG_E2E=1 after scripts/e2e-setup.sh to run real Redpanda acceptance")
 	}
+	binaryPath := os.Getenv("CNPG_COLLECTOR_BIN")
+	require.NotEmpty(t, binaryPath, "CNPG_COLLECTOR_BIN must name the actual Collector binary")
 	binaryPath, err := filepath.Abs(binaryPath)
 	require.NoError(t, err)
 	root, err := filepath.Abs("..")
@@ -46,7 +47,7 @@ func TestReplayE2E(t *testing.T) {
 	if composePath == "" {
 		composePath = filepath.Join(root, "integration", "compose.yaml")
 	}
-	compose := func(args ...string) {
+	compose := func(t *testing.T, args ...string) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(t.Context(), 180*time.Second)
 		defer cancel()
@@ -54,7 +55,7 @@ func TestReplayE2E(t *testing.T) {
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "%s", out)
 	}
-	artifactPath := os.Getenv("CNPG_E2E_OUTPUT")
+	artifactPath := os.Getenv("CNPG_DECODED_EVENTS")
 	if artifactPath == "" {
 		artifactPath = filepath.Join(root, "decoded-events.jsonl")
 	}
@@ -72,7 +73,7 @@ func TestReplayE2E(t *testing.T) {
 	require.NoError(t, err)
 	info, err := avroprocessor.LoadSchema(t.Context(), regConfig)
 	require.NoError(t, err)
-	decoder := registry.NewDecoder(regClient)
+	decoder := inspect.NewDecoder(regClient)
 	tlsConfig, err := tlsFiles.LoadTLSConfig(t.Context())
 	require.NoError(t, err)
 	client, err := kgo.NewClient(kgo.SeedBrokers("localhost:19092"), kgo.DialTLSConfig(tlsConfig),
@@ -138,9 +139,9 @@ func TestReplayE2E(t *testing.T) {
 	}
 	start := func(t *testing.T, config string) func() {
 		t.Helper()
-		logPath := config + ".collector.log"
-		log, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+		log, err := os.CreateTemp(filepath.Dir(config), "collector-*.log")
 		require.NoError(t, err)
+		logPath := log.Name()
 		cmd := exec.Command(binaryPath, "--config=file:"+config)
 		cmd.Stdout, cmd.Stderr = log, log
 		require.NoError(t, cmd.Start())
@@ -187,7 +188,11 @@ func TestReplayE2E(t *testing.T) {
 			}
 		}
 	}
-	recording, err := os.ReadFile(filepath.Join(root, "testdata", "capture", "operations.jsonl"))
+	recordingPath := os.Getenv("CNPG_RECORDING")
+	if recordingPath == "" {
+		recordingPath = filepath.Join(root, "testdata", "capture", "operations.jsonl")
+	}
+	recording, err := os.ReadFile(recordingPath)
 	require.NoError(t, err, "canonical capture is required; synthetic inputs cannot replace it")
 
 	// Each run narrows path metadata to one real instance so primary and replicas
@@ -268,14 +273,14 @@ func TestReplayE2E(t *testing.T) {
 		stop()
 		stop = start(t, config)
 		require.Empty(t, collect(t, 3*time.Second))
-		compose("stop", "-t", "5", "redpanda")
+		compose(t, "stop", "-t", "5", "redpanda")
 		// The loaded schema is still usable while the single broker AND registry
 		// are down. Native retry/persistent queue own buffering, not our code.
 		for i := 0; i < 40; i++ {
 			appendLines(line("included", "10.0.0.2:321", fmt.Sprintf("outage-%d", i), "connection authorized: outage", "LOG", "00000"))
 		}
 		time.Sleep(3 * time.Second)
-		compose("start", "--wait", "--wait-timeout", "150", "redpanda")
+		compose(t, "start", "--wait", "--wait-timeout", "150", "redpanda")
 		events = collect(t, 5*time.Second)
 		require.Len(t, events, 40, "native persistent queue must recover after broker outage")
 		for i, e := range events {
