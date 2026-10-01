@@ -19,6 +19,7 @@ import (
 	"github.com/djosh34/cnpg-to-kafka/internal/replay"
 	"github.com/djosh34/cnpg-to-kafka/processor/avroprocessor"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/collector/config/configtls"
 )
@@ -76,10 +77,18 @@ func TestRealReplay(t *testing.T) {
 	decoder := inspect.NewDecoder(regClient)
 	tlsConfig, err := tlsFiles.LoadTLSConfig(t.Context())
 	require.NoError(t, err)
-	client, err := kgo.NewClient(kgo.SeedBrokers("localhost:19092"), kgo.DialTLSConfig(tlsConfig),
-		kgo.ConsumeTopics("cnpg-connections"), kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
+	client, err := kgo.NewClient(kgo.SeedBrokers("localhost:19092"), kgo.DialTLSConfig(tlsConfig))
 	require.NoError(t, err)
 	defer client.Close()
+	// Setup may preserve a previous run's topic. Snapshot native end offsets
+	// before any Collector starts, without deleting/provisioning runtime objects.
+	baselineCtx, baselineCancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ends, err := kadm.NewClient(client).ListEndOffsets(baselineCtx, "cnpg-connections")
+	baselineCancel()
+	require.NoError(t, err)
+	require.NoError(t, ends.Error())
+	require.NotEmpty(t, ends["cnpg-connections"])
+	client.AddConsumePartitions(ends.KOffsets())
 
 	// collect observes a bounded quiet period after filesystem work completes.
 	// Every successfully decoded record is flushed to the failure-safe artifact
