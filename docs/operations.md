@@ -130,10 +130,19 @@ startup rather than promising live credential reload.
   permanent bad-record condition.
 - A clean shutdown/restart with intact state should not replay old events.
   Send SIGTERM, allow the process to exit, and retain its state directory; do not
-  delete state or use SIGKILL as a normal stop procedure. Kubernetes's example
-  termination grace is 60 seconds. Forced termination retains the documented
-  abrupt-crash limits; transient Kafka downtime should leave durable queued
-  items for recovery, not require an operator to discard them.
+  delete state or use SIGKILL as a normal stop procedure.
+- **Shutdown during a Kafka outage can exceed the termination grace.** The native
+  queue waits for its consumers before closing the Kafka producer. An in-flight
+  idempotent produce may wait for a definitive broker result: cancellation could
+  otherwise discard a record the broker accepted and break producer sequencing.
+  Therefore a shutdown timeout is not a guarantee of prompt exit. Kubernetes may
+  send SIGTERM, wait the example's 60-second grace, then use SIGKILL. That grace
+  is a Kubernetes setting, not a guaranteed Collector shutdown bound.
+  Keep idempotence enabled; no custom shutdown/retry workaround is required.
+  Complete fsync-backed queued events remain recoverable on restart with intact
+  storage, including after forced termination. The abrupt-crash duplicate and
+  incomplete-CRI limits above still apply; do not discard the queue to recover
+  from transient Kafka downtime.
 
 The example queue uses `sizer: bytes` and `queue_size: 67108864` (64 MiB of
 serialized requests, **not** exact disk usage), one consumer, and

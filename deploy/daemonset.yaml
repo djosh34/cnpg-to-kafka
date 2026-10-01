@@ -16,6 +16,8 @@ spec:
       nodeSelector:
         kubernetes.io/os: linux
         kubernetes.io/arch: amd64
+      # Kafka outage/idempotent in-flight produce may outlast this grace;
+      # Kubernetes can then SIGKILL. Retain state for durable queue recovery.
       terminationGracePeriodSeconds: 60
       securityContext:
         seccompProfile:

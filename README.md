@@ -51,10 +51,13 @@ these commands.
 See [operations and the plain DaemonSet example](docs/operations.md) for mounts,
 configuration, shutdown and durability boundaries, and
 [filesystem replay](docs/replay.md) for replaying the deliberate real capture.
-Routine PR tests replay the checked-in recording; they do not install k3s or
-CNPG. Test setup alone provisions disposable services, topic and sample schema.
-Consumed, Avro-decoded Collector events are printed and uploaded as
-`decoded-events.jsonl`, including available output on failed end-to-end runs.
+Routine PR acceptance must replay the checked-in real recording, without
+installing k3s or CNPG. Test setup alone provisions disposable services, topic
+and sample schema. The acceptance workflow must print consumed, Avro-decoded
+Collector events and upload `decoded-events.jsonl`, including available output
+on failed end-to-end runs. Actual capture, passing replay-based Actions, and
+final-image CVE scan results are still pending; workflow descriptions are not
+completion claims.
 
 ## Inspect Kafka events
 
