@@ -79,13 +79,8 @@ receivers:
         if: 'attributes.hostname matches "^.+:[0-9]+$"'
         parse_from: attributes.hostname
         parse_to: attributes
-        regex: '^(?:\[(?P<bracketed_client>[^\]]+)\]|(?P<plain_client>.+)):[0-9]+$'
+        regex: '^\[?(?P<hostname>[^\]]+)\]?:[0-9]+$'
         on_error: drop
-      - type: add
-        id: client-host
-        if: 'attributes.bracketed_client != nil or attributes.plain_client != nil'
-        field: attributes.hostname
-        value: 'EXPR(attributes.bracketed_client != "" ? attributes.bracketed_client : attributes.plain_client)'
 
 processors:
   avro:
