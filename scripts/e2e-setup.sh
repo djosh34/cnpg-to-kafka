@@ -5,9 +5,13 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 project=${1:-cnpg-e2e}
 schema=${2:-"$root/schema/connection-event.avsc"}
 compose=(docker compose -p "$project" -f "$root/integration/compose.yaml")
-"$root/scripts/e2e-certs.sh"
-"${compose[@]}" up -d --wait --wait-timeout 150
 certs="$root/integration/.certs"
+# Preserve live identities on repeat setup; generating a new CA underneath a
+# running broker would invalidate its already-loaded certificates.
+if [[ ! -f "$certs/ca.crt" ]]; then
+  "$root/scripts/e2e-certs.sh"
+fi
+"${compose[@]}" up -d --wait --wait-timeout 150
 curl_args=(--silent --show-error --fail --max-time 5 \
   --cacert "$certs/ca.crt" --cert "$certs/client.crt" --key "$certs/client.key")
 # Broker health alone does not imply the built-in registry is ready.
@@ -24,7 +28,7 @@ if [[ "$ready" != true ]]; then
   exit 1
 fi
 "${compose[@]}" exec -T redpanda rpk topic create cnpg-connections \
-  --partitions 1 --replicas 1
+  --partitions 1 --replicas 1 --if-not-exists
 # jq quotes the complete authoritative Avro schema; no handcrafted JSON escaping.
 jq -n --rawfile schema "$schema" '{schema: $schema, schemaType: "AVRO"}' |
   curl "${curl_args[@]}" -H 'Content-Type: application/vnd.schemaregistry.v1+json' \
