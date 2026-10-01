@@ -32,12 +32,16 @@ boundary is [`Event`/`EventContext`](processor/avroprocessor/event.go) and the
 
 ## Build and run
 
-Use the Go version declared in `go.mod`:
+Use the Go version declared in `go.mod` and GNU `patch`. The shared preparation
+script generates vendor sources and applies the two [disclosed native dependency
+feature cuts](patches/README.md). These are local modifications, not equivalent
+upstream releases; canonical module identities/versions remain scanner-visible.
 
 ```sh
-go test ./...
+./scripts/prepare-go.sh
+go test -mod=vendor ./...
 mkdir -p bin
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/cnpg-to-kafka ./cmd/collector
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor -o bin/cnpg-to-kafka ./cmd/collector
 ./bin/cnpg-to-kafka validate --config=config.yaml
 ./bin/cnpg-to-kafka --config=config.yaml
 ```
@@ -67,7 +71,7 @@ Use the same runtime YAML and mounted TLS files; no separate consumer config is
 needed:
 
 ```sh
-go run ./cmd/inspect --config config.yaml --limit 10 --timeout 30s
+go run -mod=vendor ./cmd/inspect --config config.yaml --limit 10 --timeout 30s
 ```
 
 The helper consumes from the earliest available records without a consumer group

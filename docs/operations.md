@@ -114,8 +114,8 @@ startup rather than promising live credential reload.
 
 ## Local real-broker acceptance
 
-Use Linux amd64, the Go version in `go.mod`, Docker with Compose v2, Bash,
-OpenSSL, curl, and jq. This uses one disposable Redpanda container and its built-in
+Use Linux amd64, the Go version in `go.mod`, GNU `patch`, Docker with Compose v2,
+Bash, OpenSSL, curl, and jq. This uses one disposable Redpanda container and its built-in
 registry with generated file-only Kafka TLS/registry mTLS identities. It never
 installs k3s or refreshes the recording. Ports `19092` and `18081` must be free;
 do not run competing Compose projects on those fixed ports.
@@ -123,14 +123,15 @@ do not run competing Compose projects on those fixed ports.
 From the repository root:
 
 ```sh
+./scripts/prepare-go.sh
 mkdir -p bin
-CGO_ENABLED=0 go build -p 1 -o bin/cnpg-to-kafka ./cmd/collector
+CGO_ENABLED=0 go build -mod=vendor -p 1 -o bin/cnpg-to-kafka ./cmd/collector
 bash scripts/e2e-setup.sh cnpg-e2e
 CNPG_E2E=1 \
   CNPG_COLLECTOR_BIN="$PWD/bin/cnpg-to-kafka" \
   CNPG_RECORDING="$PWD/testdata/capture/operations.jsonl" \
   CNPG_DECODED_EVENTS="$PWD/decoded-events.jsonl" \
-  go test -p 1 -v -count=1 -run '^TestRealReplay$' -timeout=10m ./integration
+  go test -mod=vendor -p 1 -v -count=1 -run '^TestRealReplay$' -timeout=10m ./integration
 ```
 
 The opt-in test starts the actual Collector before applying the canonical real
