@@ -96,7 +96,7 @@ func Run(ctx context.Context, configPath string, out io.Writer, limit int) error
 
 func loadConfig(ctx context.Context, path string) (configkafka.ClientConfig, string, avroprocessor.Config, error) {
 	kafka := configkafka.NewDefaultClientConfig()
-	var avro avroprocessor.Config
+	avro := *avroprocessor.NewFactory().CreateDefaultConfig().(*avroprocessor.Config)
 	resolver, err := confmap.NewResolver(confmap.ResolverSettings{
 		URIs:              []string{"file:" + path},
 		ProviderFactories: []confmap.ProviderFactory{fileprovider.NewFactory()},
