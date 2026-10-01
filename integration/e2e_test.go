@@ -307,7 +307,7 @@ func TestRealReplay(t *testing.T) {
 		stop(false)
 		stop = start(t, config)
 		require.Empty(t, collect(t, 3*time.Second))
-		t.Cleanup(func() { compose(t, "start", "--wait", "--wait-timeout", "150", "redpanda") })
+		t.Cleanup(func() { compose(t, "up", "-d", "--wait", "--wait-timeout", "150", "redpanda") })
 		compose(t, "stop", "-t", "5", "redpanda")
 		// The loaded schema is still usable while the single broker AND registry
 		// are down. Native retry/persistent queue own buffering, not our code.
@@ -315,7 +315,7 @@ func TestRealReplay(t *testing.T) {
 			appendLines(line("included", "10.0.0.2:321", fmt.Sprintf("outage-%d", i), "connection authorized: outage", "LOG", "00000"))
 		}
 		time.Sleep(3 * time.Second)
-		compose(t, "start", "--wait", "--wait-timeout", "150", "redpanda")
+		compose(t, "up", "-d", "--wait", "--wait-timeout", "150", "redpanda")
 		events = collect(t, 5*time.Second)
 		require.Len(t, events, 40, "native persistent queue must recover after broker outage")
 		for i, e := range events {
@@ -370,7 +370,7 @@ func TestRealReplay(t *testing.T) {
 		}
 		require.True(t, queued, "all complete records must enter the native persistent queue before SIGKILL:\n%s", metrics)
 		stop(true)
-		compose(t, "start", "--wait", "--wait-timeout", "150", "redpanda")
+		compose(t, "up", "-d", "--wait", "--wait-timeout", "150", "redpanda")
 		// One container supplies both services. Registry readiness must be restored
 		// before new Collector startup performs its one read-only schema lookup.
 		deadline = time.Now().Add(30 * time.Second)
