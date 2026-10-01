@@ -4,3 +4,4 @@ bin
 *.tar
 .env
 .env.*
+integration/.certs
