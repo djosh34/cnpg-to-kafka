@@ -3,12 +3,14 @@
 package inspect
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 
+	"github.com/confluentinc/confluent-avro-go/v2"
 	"github.com/confluentinc/confluent-avro-go/v2/registry"
 	"github.com/djosh34/cnpg-to-kafka/internal/tlspolicy"
 	"github.com/djosh34/cnpg-to-kafka/processor/avroprocessor"
@@ -25,7 +27,7 @@ func Run(ctx context.Context, configPath string, out io.Writer, limit int) error
 	if limit < 0 {
 		return errors.New("limit must not be negative")
 	}
-	kafka, topic, avro, err := loadConfig(ctx, configPath)
+	kafka, topic, mapper, err := loadConfig(ctx, configPath)
 	if err != nil {
 		return err
 	}
@@ -43,15 +45,16 @@ func Run(ctx context.Context, configPath string, out io.Writer, limit int) error
 	}
 	defer client.Close()
 
-	decoders := make([]*registry.Decoder, 0, len(avro.Registry.URLs))
+	decoders := make([]*registry.Decoder, 0, len(mapper.Registry.URLs))
 	var clientErrors []error
-	for _, endpoint := range avro.Registry.URLs {
-		registryClient, err := avroprocessor.NewRegistryClient(ctx, endpoint, avro.Registry)
+	for _, endpoint := range mapper.Registry.URLs {
+		registryClient, err := avroprocessor.NewRegistryClient(ctx, endpoint, mapper.Registry)
 		if err != nil {
 			clientErrors = append(clientErrors, err)
 			continue
 		}
-		decoders = append(decoders, registry.NewDecoder(registryClient))
+		decoders = append(decoders, registry.NewDecoder(registryClient,
+			registry.WithAPI(streamingAPI{API: avro.DefaultConfig})))
 	}
 	if len(decoders) == 0 {
 		return errors.Join(clientErrors...)
@@ -92,6 +95,15 @@ func Run(ctx context.Context, configPath string, out io.Writer, limit int) error
 			}
 		}
 	}
+}
+
+// The codec's byte-slice Unmarshal masks wrapped EOF from truncated data. Its
+// native streaming decoder preserves that error; framing and schema-ID caching
+// remain entirely in registry.Decoder.
+type streamingAPI struct{ avro.API }
+
+func (a streamingAPI) Unmarshal(schema avro.Schema, data []byte, v any) error {
+	return a.NewDecoder(schema, bytes.NewReader(data)).Decode(v)
 }
 
 func loadConfig(ctx context.Context, path string) (configkafka.ClientConfig, string, avroprocessor.Config, error) {
