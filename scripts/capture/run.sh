@@ -23,6 +23,13 @@ containerLogMonitorInterval: 1s
 YAML
 sudo env INSTALL_K3S_VERSION="$k3s" INSTALL_K3S_EXEC='server --disable traefik --disable servicelb --write-kubeconfig-mode 644' sh /tmp/install-k3s.sh
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+# Installation starts the service but can return before the API/node exists.
+ready=false
+for _ in $(seq 1 90); do
+  if kubectl get --raw=/readyz >/dev/null 2>&1 && [[ -n $(kubectl get nodes -o name) ]]; then ready=true; break; fi
+  sleep 2
+done
+if ! "$ready"; then sudo journalctl -u k3s -n 80 --no-pager; exit 1; fi
 kubectl wait --for=condition=Ready node --all --timeout=180s
 kubectl apply --server-side -f "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/${cnpg}/releases/cnpg-${cnpg#v}.yaml"
 kubectl rollout status deployment/cnpg-controller-manager -n cnpg-system --timeout=300s
@@ -37,7 +44,7 @@ kubectl exec -n capture "$primary" -c postgres -- psql -U postgres -d app -v ON_
 # Wait for the role DDL to replicate before beginning the fixed capture interval.
 for pod in cnpg-1 cnpg-2 cnpg-3; do
   ready=false
-  for i in $(seq 1 30); do
+  for _ in $(seq 1 30); do
     if [[ $(kubectl exec -n capture "$pod" -c postgres -- psql -U postgres -Atc "SELECT count(*) FROM pg_roles WHERE rolname IN ('included','excluded')") == 2 ]]; then ready=true; break; fi
     sleep 1
   done
