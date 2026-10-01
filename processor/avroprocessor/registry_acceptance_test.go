@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"log"
 	"math/big"
@@ -178,8 +179,8 @@ func TestRegistryCancellationStopsFallback(t *testing.T) {
 	cancel()
 	select {
 	case err := <-result:
-		if err == nil {
-			t.Fatal("canceled lookup succeeded")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled lookup returned %v, want context.Canceled", err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("lookup did not honor cancellation")
@@ -211,6 +212,11 @@ func TestRegistryFileOnlyMutualTLS(t *testing.T) {
 			}
 		})
 	}
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		writeRegistrySchema(w)
+	}))
+	t.Cleanup(plain.Close)
 	for _, invalid := range []string{"no CA", "no cert", "no key", "system roots", "insecure", "skip verify", "inline CA", "inline cert", "inline key", "HTTP"} {
 		t.Run(invalid, func(t *testing.T) {
 			cfg := registryTestConfig(clientTLS, server.URL)
@@ -234,7 +240,7 @@ func TestRegistryFileOnlyMutualTLS(t *testing.T) {
 			case "inline key":
 				cfg.TLS.KeyPem = "inline material forbidden"
 			case "HTTP":
-				cfg.URLs = []string{"http://127.0.0.1:1"}
+				cfg.URLs = []string{plain.URL}
 			}
 			if _, err := avroprocessor.LoadSchema(context.Background(), cfg); err == nil {
 				t.Fatal("file-only verified mTLS policy not enforced")
