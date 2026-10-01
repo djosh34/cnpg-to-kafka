@@ -45,13 +45,24 @@ jobs:
           trivy image --image-src docker --scanners vuln \
             --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --exit-code 1 \
             --config '' --ignorefile '' --timeout 15m \
-            cnpg-to-kafka:scan | tee trivy-report.txt
+            --format json --list-all-pkgs --output trivy-report.json \
+            cnpg-to-kafka:scan
+      - name: Show available scan output
+        if: always()
+        run: |
+          set -o pipefail
+          if [[ -s trivy-report.json ]]; then
+            trivy convert --config '' --ignorefile '' --scanners vuln --format table \
+              trivy-report.json | tee trivy-report.txt
+          fi
       - name: Upload available scan output
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: trivy-report
-          path: trivy-report.txt
+          path: |
+            trivy-report.txt
+            trivy-report.json
           if-no-files-found: warn
       - name: Save the scanned image without rebuilding
         run: docker save cnpg-to-kafka:scan -o image.tar
