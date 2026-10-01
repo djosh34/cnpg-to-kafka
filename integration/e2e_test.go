@@ -53,7 +53,9 @@ func TestRealReplay(t *testing.T) {
 	}
 	compose := func(t *testing.T, args ...string) {
 		t.Helper()
-		ctx, cancel := context.WithTimeout(t.Context(), 180*time.Second)
+		// testing cancels t.Context before cleanup; broker restoration must
+		// still run there. The command always has its own finite deadline.
+		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-p", project, "-f", composePath}, args...)...)
 		out, err := cmd.CombinedOutput()
