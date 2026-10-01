@@ -21,7 +21,8 @@ gh run download RUN_ID --repo djosh34/cnpg-to-kafka --name cnpg-capture --dir /t
 The script resolves the newest stable CNPG and newest k3s patch in its supported
 Kubernetes range. PostgreSQL's `18-system-trixie` image resolves the current PG18
 patch; `versions.txt` records actual server version and pulled image IDs. Native
-kubelet config lowers rotation to 100Ki/three files/one-second monitoring.
+kubelet config lowers rotation to 100Ki/three files/three-second monitoring
+(the Kubernetes 1.36 minimum).
 Connection/disconnection logging is enabled; direct TCP sessions cover each pod,
 `included`/`excluded` roles, bad passwords and an unknown role. Ordinary PostgreSQL
 LOG output causes actual kubelet rotation; the runtime stops one replica container

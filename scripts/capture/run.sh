@@ -19,7 +19,7 @@ apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration
 containerLogMaxSize: 100Ki
 containerLogMaxFiles: 3
-containerLogMonitorInterval: 1s
+containerLogMonitorInterval: 3s
 YAML
 sudo env INSTALL_K3S_VERSION="$k3s" INSTALL_K3S_EXEC='server --disable traefik --disable servicelb --write-kubeconfig-mode 644' sh /tmp/install-k3s.sh
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
@@ -55,7 +55,7 @@ done
   printf 'PostgreSQL: '
   kubectl exec -n capture "$primary" -c postgres -- psql -U postgres -Atc 'SHOW server_version'
   kubectl get pods -n capture -o custom-columns='POD:.metadata.name,IMAGE:.spec.containers[*].image,IMAGE_ID:.status.containerStatuses[*].imageID,IP:.status.podIP'
-  printf 'Duration: 300 seconds after setup/readiness; kubelet rotation threshold: 100Ki, monitor interval: 1s\n'
+  printf 'Duration: 300 seconds after setup/readiness; kubelet rotation threshold: 100Ki, monitor interval: 3s\n'
   printf 'Capture source ref: %s\nCapture run: %s\n' "${GITHUB_SHA:-local}" "${GITHUB_SERVER_URL:-local}/${GITHUB_REPOSITORY:-local}/actions/runs/${GITHUB_RUN_ID:-local}"
 } > "$out/versions.txt"
 sudo python3 scripts/capture/record.py /var/log/pods "$out" &
