@@ -53,8 +53,7 @@ func Run(ctx context.Context, configPath string, out io.Writer, limit int) error
 			clientErrors = append(clientErrors, err)
 			continue
 		}
-		decoders = append(decoders, registry.NewDecoder(registryClient,
-			registry.WithAPI(streamingAPI{API: avro.DefaultConfig})))
+		decoders = append(decoders, NewDecoder(registryClient))
 	}
 	if len(decoders) == 0 {
 		return errors.Join(clientErrors...)
@@ -95,6 +94,12 @@ func Run(ctx context.Context, configPath string, out io.Writer, limit int) error
 			}
 		}
 	}
+}
+
+// NewDecoder shares the native wire-ID decoder with callers that also need
+// record-level assertions. The registry client owns schema lookup and caching.
+func NewDecoder(client *registry.Client) *registry.Decoder {
+	return registry.NewDecoder(client, registry.WithAPI(streamingAPI{API: avro.DefaultConfig}))
 }
 
 // The codec's byte-slice Unmarshal masks wrapped EOF from truncated data. Its
