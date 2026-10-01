@@ -26,7 +26,9 @@ necessary output fields may be skipped with DEBUG diagnostics.
 Each Kafka value is one event: `0x00`, the four-byte big-endian Schema Registry
 ID, then the Avro binary datum. There is no JSON or OTLP envelope. The example
 schema is intentionally small; it does not claim compatibility with a private
-schema. The schema fetched at startup is authoritative.
+schema. The schema fetched at startup is authoritative. The private-schema fork
+boundary is [`Event`/`EventContext`](processor/avroprocessor/event.go) and the
+[example schema](schema/connection-event.avsc); adapt the mapper with them.
 
 ## Build and run
 
@@ -65,8 +67,11 @@ go run ./cmd/inspect --config config.yaml --limit 10 --timeout 30s
 
 The helper consumes from the earliest available records without a consumer group
 or offset commits, resolves each record's schema ID, and prints decoded JSONL to
-stdout (errors go to stderr). `--limit 0` follows until timeout or signal. This is
-read-only inspection: it does not create a topic or register a schema.
+stdout (errors go to stderr). `--limit 0` follows until timeout or signal; a
+positive limit not reached by the deadline exits with an error. Unlike the
+running Collector's startup-only lookup, the inspector needs registry access to
+resolve historical wire IDs (cached by the library). This is read-only
+inspection: it does not create a topic or register a schema.
 
 ## Image boundary
 
