@@ -64,7 +64,7 @@ trap 'sudo kill "$recorder" 2>/dev/null || true; sudo chown -R "$(id -u):$(id -g
 for _ in $(seq 1 30); do [[ -e $out/ready ]] && break; sleep 1; done
 [[ -e $out/ready ]]
 read -ra ips <<< "$(kubectl get pod -n capture cnpg-1 cnpg-2 cnpg-3 -o jsonpath='{range .items[*]}{.status.podIP}{" "}{end}')"
-kubectl exec -i -n capture client -- bash -s -- "${ips[@]}" < scripts/capture/activity.sh > "$out/activity.log" 2>&1 &
+kubectl exec -i -n capture client -- bash -s -- "${ips[@]}" < scripts/capture/activity.sh >> "$out/activity.log" 2>&1 &
 activity=$!
 # Stop one replica container through the real runtime, not a fabricated log rename.
 sleep 145
