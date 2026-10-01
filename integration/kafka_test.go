@@ -201,23 +201,29 @@ func TestKafkaQueueSaturationBackpressures(t *testing.T) {
 	cluster := kafkaCluster(t, "events")
 	var outage atomic.Bool
 	outage.Store(true)
-	cluster.ControlKey(0, func(req kmsg.Request) (kmsg.Response, error, bool) {
+	cluster.ControlKey(0, func(kmsg.Request) (kmsg.Response, error, bool) {
 		cluster.KeepControl()
 		if outage.Load() {
-			return rejectedProduce(req), nil, true
+			return nil, errors.New("synthetic Kafka transport outage"), true
 		}
 		return nil, nil, false
 	})
+	storageID := component.MustNewID("file_storage")
+	host, storage := startStorage(t, t.TempDir(), storageID)
+	defer shutdown(t, storage)
 	cfg := kafkaConfig(cluster, "events")
 	queue := cfg.QueueBatchConfig.Get()
-	queue.QueueSize = 1
+	queue.StorageID = &storageID
+	queue.Sizer = exporterhelper.RequestSizerTypeBytes
+	queue.QueueSize = int64((&plog.ProtoMarshaler{}).LogsSize(byteLogs([]byte{0, 0, 0, 0, 7, 1})))
 	queue.NumConsumers = 1
 	queue.BlockOnOverflow = true
-	exp := startKafka(t, cfg, componenttest.NewNopHost())
+	exp := startKafka(t, cfg, host)
 	defer shutdown(t, exp)
 
-	// One entry is in flight and at most one waits. The next must block and
-	// honor cancellation instead of silently evicting an already queued entry.
+	// Match the example's native byte-sized persistent queue, with room for
+	// one complete request (including in-flight entries). Further offers must
+	// honor cancellation rather than silently evicting an already queued entry.
 	accepted := make([][]byte, 0, 3)
 	blocked := false
 	for i := byte(1); i <= 3; i++ {
@@ -237,25 +243,6 @@ func TestKafkaQueueSaturationBackpressures(t *testing.T) {
 	outage.Store(false)
 	got := consumeBodies(t, cluster, "events", len(accepted))
 	require.Equal(t, accepted, got, "outage must not discard previously accepted entries")
-}
-
-// Explicit retryable rejection keeps saturation coverage deterministic without
-// ambiguous broker acknowledgements. This is synthetic, not quorum testing.
-func rejectedProduce(req kmsg.Request) kmsg.Response {
-	produce := req.(*kmsg.ProduceRequest)
-	response := produce.ResponseKind().(*kmsg.ProduceResponse)
-	for _, topic := range produce.Topics {
-		rt := kmsg.NewProduceResponseTopic()
-		rt.Topic = topic.Topic
-		for _, partition := range topic.Partitions {
-			rp := kmsg.NewProduceResponseTopicPartition()
-			rp.Partition = partition.Partition
-			rp.ErrorCode = 19 // NOT_ENOUGH_REPLICAS: retriable, not committed.
-			rt.Partitions = append(rt.Partitions, rp)
-		}
-		response.Topics = append(response.Topics, rt)
-	}
-	return response
 }
 
 func kafkaCluster(t *testing.T, topic string) *kfake.Cluster {
