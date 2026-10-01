@@ -16,13 +16,14 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/consumer"
-	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/processor"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
-func TestProcessorFramesNestedEventsAndPreservesRetryInput(t *testing.T) {
+func TestProcessorMixedBatchPreservesValidEventsAndRetryInput(t *testing.T) {
 	ctx := context.Background()
 	clientTLS, serverTLS := registryTestTLS(t)
 	schemaBytes, err := os.ReadFile("../../schema/connection-event.avsc")
@@ -73,8 +74,11 @@ func TestProcessorFramesNestedEventsAndPreservesRetryInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	factory := avroprocessor.NewFactory()
+	warnings, observed := observer.New(zap.WarnLevel)
+	telemetry := componenttest.NewNopTelemetrySettings()
+	telemetry.Logger = zap.New(warnings)
 	p, err := factory.CreateLogs(ctx, processor.Settings{
-		ID: component.NewID(factory.Type()), TelemetrySettings: componenttest.NewNopTelemetrySettings(),
+		ID: component.NewID(factory.Type()), TelemetrySettings: telemetry,
 	}, cfg, next)
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +100,7 @@ func TestProcessorFramesNestedEventsAndPreservesRetryInput(t *testing.T) {
 		{EventType: "LOGIN_FAILED"},
 		{Role: "excluded-role", EventType: "LOGIN_FAILED", Context: avroprocessor.EventContext{Database: "db"}},
 	}
-	for _, event := range want {
+	for i, event := range want {
 		r := records.AppendEmpty()
 		r.Body().SetStr("native body ignored, not reparsed")
 		a := r.Attributes()
@@ -109,6 +113,15 @@ func TestProcessorFramesNestedEventsAndPreservesRetryInput(t *testing.T) {
 		}
 		a.PutStr("database", event.Context.Database)
 		a.PutStr("unrelated-extra", "ignored")
+		if i == 0 {
+			// Reject this datum through the schema's enum encoder, not a Go
+			// classifier. Valid records before AND after it must reach next.
+			bad := records.AppendEmpty()
+			bad.Body().SetStr("unencodable retry input stays unchanged")
+			bad.Attributes().PutStr("role", "app")
+			bad.Attributes().PutStr("hostname", "client")
+			bad.Attributes().PutStr("eventtype", "NOT_AN_EVENT")
+		}
 	}
 	// Successful events missing role/client, and absent eventtype, are skipped.
 	for _, attrs := range []map[string]string{
@@ -122,10 +135,14 @@ func TestProcessorFramesNestedEventsAndPreservesRetryInput(t *testing.T) {
 			r.Attributes().PutStr(k, v)
 		}
 	}
-	if err := p.ConsumeLogs(ctx, input); !errors.Is(err, queueFull) {
-		t.Fatalf("downstream error = %v", err)
+	consumeErr := p.ConsumeLogs(ctx, input)
+	if len(batches) != 1 || batches[0].LogRecordCount() != len(want) {
+		t.Fatalf("unencodable record prevented delivery of valid events: downstream calls=%d, error=%v", len(batches), consumeErr)
 	}
-	if input.LogRecordCount() != 7 || records.At(0).Body().Type() != pcommon.ValueTypeStr {
+	if !errors.Is(consumeErr, queueFull) {
+		t.Fatalf("downstream error = %v", consumeErr)
+	}
+	if input.LogRecordCount() != 8 || records.At(0).Body().Type() != pcommon.ValueTypeStr || records.At(1).Body().Type() != pcommon.ValueTypeStr {
 		t.Fatal("processor altered retry input")
 	}
 	if _, ok := records.At(0).Attributes().Get("role"); !ok {
@@ -155,15 +172,10 @@ func TestProcessorFramesNestedEventsAndPreservesRetryInput(t *testing.T) {
 		t.Fatalf("%d registry requests, want startup lookup only", requests.Load())
 	}
 
-	// Invalid native event symbols are rejected by the schema-based codec,
-	// rather than a duplicate Go classifier.
-	invalid := plog.NewLogs()
-	a := invalid.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty().Attributes()
-	a.PutStr("role", "app")
-	a.PutStr("hostname", "client")
-	a.PutStr("eventtype", "NOT_AN_EVENT")
-	if err := p.ConsumeLogs(ctx, invalid); !consumererror.IsPermanent(err) {
-		t.Fatalf("invalid enum should be a permanent encoding error, got %v", err)
+	// Each processing attempt diagnoses the record-local rejection, without
+	// making the otherwise valid batch a permanent failure.
+	if observed.Len() != 2 || observed.All()[0].Message != "cannot encode connection event" || observed.All()[1].Message != "cannot encode connection event" {
+		t.Fatalf("expected one rejected-record warning per attempt, got %+v", observed.All())
 	}
 }
 

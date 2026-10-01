@@ -3,7 +3,6 @@ package avroprocessor
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
 	"time"
 
 	"github.com/confluentinc/confluent-avro-go/v2"
@@ -11,7 +10,6 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/configtls"
 	"go.opentelemetry.io/collector/consumer"
-	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/processor"
@@ -38,7 +36,6 @@ func createLogs(ctx context.Context, set processor.Settings, config component.Co
 			// a retry remaps the original attributes, never our encoded byte output.
 			output := plog.NewLogs()
 			input.CopyTo(output)
-			var encodeErr error
 			for _, resource := range output.ResourceLogs().All() {
 				for _, scope := range resource.ScopeLogs().All() {
 					scope.LogRecords().RemoveIf(func(record plog.LogRecord) bool {
@@ -54,7 +51,8 @@ func createLogs(ctx context.Context, set processor.Settings, config component.Co
 						}
 						payload, err := avro.Marshal(schema.Schema, event)
 						if err != nil {
-							encodeErr = consumererror.NewPermanent(fmt.Errorf("encode connection event: %w", err))
+							// Reject only this datum. A processing error would make
+							// processorhelper discard the entire surviving batch.
 							set.Logger.Warn("cannot encode connection event", zap.Error(err))
 							return true
 						}
@@ -65,7 +63,7 @@ func createLogs(ctx context.Context, set processor.Settings, config component.Co
 					})
 				}
 			}
-			return output, encodeErr
+			return output, nil
 		},
 		processorhelper.WithCapabilities(consumer.Capabilities{MutatesData: false}),
 		processorhelper.WithStart(func(ctx context.Context, _ component.Host) error {
