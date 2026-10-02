@@ -86,8 +86,9 @@ inspection: it does not create a topic or register a schema.
 
 The runtime image is a static amd64 binary in scratch, without a built-in CA
 bundle, shell, runtime configuration or credentials. Build/test PR images do not
-receive publishing credentials. Only trusted main/release-tag workflows publish
-to GHCR, after Trivy successfully scans the actual final artifact with **zero
+receive publishing credentials. Only the [gated merged-main release DAG](docs/releases.md)
+publishes to GHCR, after replay acceptance and Trivy scan the same frozen commit's
+actual final artifact with **zero
 reported known CVEs at any severity, including unfixed findings**. Scanner
 failure blocks publication. This is a publish-time check, not a promise about
 future or unknown vulnerabilities.

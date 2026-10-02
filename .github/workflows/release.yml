@@ -1,0 +1,182 @@
+name: Validate and release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GOMAXPROCS: '2'
+      COMPOSE_PROJECT_NAME: cnpg-e2e
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Release policy tests
+        run: bash scripts/release-test.sh
+      - name: Prepare disclosed native dependency feature cuts
+        run: ./scripts/prepare-go.sh
+      - name: Check formatting and build native amd64 Collector
+        run: |
+          test "$(go env GOOS)/$(go env GOARCH)" = linux/amd64
+          test -z "$(git ls-files -z '*.go' | xargs -0 gofmt -l)"
+          go build -p 1 -mod=vendor ./...
+          mkdir -p bin
+          CGO_ENABLED=0 go build -p 1 -mod=vendor -o bin/cnpg-to-kafka ./cmd/collector
+      - name: Fast Go tests
+        run: go test -p 1 -mod=vendor -count=1 -timeout=8m ./...
+      - name: Start one disposable TLS Redpanda and its mTLS registry
+        run: bash scripts/e2e-setup.sh "$COMPOSE_PROJECT_NAME"
+      - name: Real filesystem replay through actual Collector and Kafka
+        env:
+          CNPG_E2E: '1'
+          CNPG_COLLECTOR_BIN: ${{ github.workspace }}/bin/cnpg-to-kafka
+          CNPG_RECORDING: ${{ github.workspace }}/testdata/capture/operations.jsonl
+          CNPG_DECODED_EVENTS: ${{ github.workspace }}/decoded-events.jsonl
+        run: |
+          go test -p 1 -mod=vendor -list '^TestRealReplay$' ./integration | grep -Fx TestRealReplay
+          go test -p 1 -mod=vendor -v -count=1 -run '^TestRealReplay$' -timeout=10m ./integration
+      - name: Show available consumed and Avro-decoded Kafka events
+        if: always()
+        run: |
+          if test -f decoded-events.jsonl; then
+            cat decoded-events.jsonl
+          else
+            echo 'No decoded events file available; see preceding failure.'
+          fi
+      - name: Upload available decoded Kafka events, including on failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: decoded-events-${{ github.run_attempt }}
+          path: decoded-events.jsonl
+          if-no-files-found: warn
+      - name: Stop disposable services
+        if: always()
+        run: docker compose -p "$COMPOSE_PROJECT_NAME" -f integration/compose.yaml down -v
+
+  build-scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      image-artifact-id: ${{ steps.scanned-image.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v4
+      - name: Build the final amd64 image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: cnpg-to-kafka:scan
+          provenance: false
+      - uses: aquasecurity/setup-trivy@v0.3.1
+        with:
+          version: latest
+      - name: Require zero known vulnerabilities
+        run: |
+          set -o pipefail
+          trivy --version
+          trivy image --image-src docker --scanners vuln \
+            --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --exit-code 1 \
+            --config '' --ignorefile '' --timeout 15m \
+            --format json --list-all-pkgs --output trivy-report.json \
+            cnpg-to-kafka:scan
+      - name: Show available scan output
+        if: always()
+        run: |
+          set -o pipefail
+          if [[ -s trivy-report.json ]]; then
+            trivy convert --config '' --ignorefile '' --scanners vuln --format table \
+              trivy-report.json | tee trivy-report.txt
+          fi
+      - name: Upload available scan output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: trivy-report-${{ github.run_attempt }}
+          path: |
+            trivy-report.txt
+            trivy-report.json
+          if-no-files-found: warn
+      - name: Save the scanned image without rebuilding
+        run: docker save cnpg-to-kafka:scan -o image.tar
+      - uses: actions/upload-artifact@v7
+        id: scanned-image
+        with:
+          name: scanned-image-${{ github.run_attempt }}
+          path: image.tar
+          retention-days: 7
+          if-no-files-found: error
+
+  merged-pr:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify an actual merged PR into this repository main at this SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/verify-merged-pr.sh
+
+  publish:
+    needs: [replay, build-scan, merged-pr]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    concurrency:
+      group: cnpg-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          ssh-key: ${{ secrets.RELEASE_TAG_SSH_KEY }}
+          persist-credentials: true
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build-scan.outputs.image-artifact-id }}
+          merge-multiple: true
+      - name: Load the exact scanned artifact
+        run: docker load -i image.tar
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Publish without rebuilding or overwriting release identities
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+          REPLAY_RESULT: ${{ needs.replay.result }}
+          SCAN_RESULT: ${{ needs.build-scan.result }}
+          MERGED_PR_RESULT: ${{ needs.merged-pr.result }}
+        run: bash scripts/publish-release.sh
