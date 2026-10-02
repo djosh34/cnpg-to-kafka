@@ -86,8 +86,13 @@ inspection: it does not create a topic or register a schema.
 
 The runtime image is a static amd64 binary in scratch, without a built-in CA
 bundle, shell, runtime configuration or credentials. Build/test PR images do not
-receive publishing credentials. Only trusted main/release-tag workflows publish
-to GHCR, after Trivy successfully scans the actual final artifact with **zero
-reported known CVEs at any severity, including unfixed findings**. Scanner
-failure blocks publication. This is a publish-time check, not a promise about
-future or unknown vulnerabilities.
+receive publishing credentials. Only pushes to main publish to GHCR (as
+`sha-<commit>` and `main`), after Trivy successfully scans the actual final
+artifact with **zero reported known CVEs at any severity, including unfixed
+findings**. Scanner failure blocks publication. This is a publish-time check,
+not a promise about future or unknown vulnerabilities.
+
+A release is a `vX.Y.Z` (or `vX.Y.Z-<prerelease>`) git tag pushed by the
+repository owner. It never builds: it re-tags the existing `sha-<commit>` image
+as the version, moves `latest` for stable versions only, and creates a GitHub
+Release. Tagging a commit that has no image from main fails.
