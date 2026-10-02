@@ -1,7 +1,3 @@
 .git
 .github
 bin
-*.tar
-.env
-.env.*
-integration/.certs

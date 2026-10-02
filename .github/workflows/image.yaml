@@ -1,20 +1,19 @@
-name: Scratch image
+name: Image
 
 on:
   pull_request:
   push:
     branches: [main]
     tags: ['v*']
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  build-scan:
-    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+  image:
+    if: github.ref_type != 'tag'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
@@ -22,62 +21,42 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - name: Test
+      - name: Check that the Collector imports no package named in .trivyignore
         run: |
-          test -z "$(git ls-files -z '*.go' | xargs -0 gofmt -l)"
-          ./scripts/prepare-go.sh
-          go test -mod=vendor ./...
+          packages=$(sed -n 's/^# \([a-z0-9.-]*\/[^ ]*\)$/\1/p' .trivyignore)
+          test "$(wc -l <<< "$packages")" -eq "$(grep -c '^[^#]' .trivyignore)"
+          ! go list -deps ./cmd/collector | grep -F "$packages"
       - uses: docker/setup-buildx-action@v4
-      - name: Build the final amd64 image
+      - name: Build
         uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64
+          build-args: VERSION=${{ github.sha }}
           load: true
-          push: false
           tags: cnpg-to-kafka:scan
           provenance: false
       - uses: aquasecurity/setup-trivy@v0.3.1
         with:
           version: latest
-      - name: Require zero known vulnerabilities
+      - name: Scan
         run: |
-          set -o pipefail
-          trivy --version
           trivy image --image-src docker --scanners vuln \
             --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --exit-code 1 \
-            --config '' --ignorefile '' --timeout 15m \
-            --format json --list-all-pkgs --output trivy-report.json \
-            cnpg-to-kafka:scan
-      - name: Show available scan output
-        if: always()
-        run: |
-          set -o pipefail
-          if [[ -s trivy-report.json ]]; then
-            trivy convert --config '' --ignorefile '' --scanners vuln --format table \
-              trivy-report.json | tee trivy-report.txt
-          fi
-      - name: Upload available scan output
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: trivy-report
-          path: |
-            trivy-report.txt
-            trivy-report.json
-          if-no-files-found: warn
-      - name: Save the scanned image without rebuilding
+            --timeout 15m cnpg-to-kafka:scan
+      - name: Save the image
+        if: github.event_name == 'push'
         run: docker save cnpg-to-kafka:scan -o image.tar
       - uses: actions/upload-artifact@v7
+        if: github.event_name == 'push'
         with:
-          name: scanned-image
+          name: image
           path: image.tar
-          retention-days: 7
-          if-no-files-found: error
+          retention-days: 1
 
   publish:
-    needs: build-scan
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: image
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -86,15 +65,14 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: scanned-image
-      - name: Load the exact scanned artifact
-        run: docker load -i image.tar
+          name: image
+      - run: docker load -i image.tar
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Push without rebuilding
+      - name: Push
         env:
           REPOSITORY: ${{ github.repository }}
           COMMIT: ${{ github.sha }}
@@ -106,14 +84,14 @@ jobs:
           done
 
   release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
       packages: write
     steps:
-      - name: Require the repository owner and a version tag
+      - name: Check that the owner pushed a version tag
         env:
           ACTOR: ${{ github.actor }}
           OWNER: ${{ github.repository_owner }}
@@ -126,7 +104,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Re-tag the image built on main and create the release
+      - name: Tag the image built on main and create the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}

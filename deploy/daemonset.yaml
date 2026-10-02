@@ -16,21 +16,17 @@ spec:
       nodeSelector:
         kubernetes.io/os: linux
         kubernetes.io/arch: amd64
-      # Kafka outage/idempotent in-flight produce may outlast this grace;
-      # Kubernetes can then SIGKILL. Retain state for durable queue recovery.
+      # During a Kafka outage the Collector can take longer than this to stop,
+      # and Kubernetes then kills it. The queue in the state directory survives.
       terminationGracePeriodSeconds: 60
       securityContext:
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: collector
-          # Replace with an immutable, reviewed release tag or digest.
-          image: ghcr.io/djosh34/cnpg-to-kafka:main
-          imagePullPolicy: Always
-          args:
-            - --config=/etc/cnpg-to-kafka/config.yaml
+          image: ghcr.io/djosh34/cnpg-to-kafka:v0.2.0
           securityContext:
-            # Host pod logs and DirectoryOrCreate state are normally root-owned.
+            # The pod logs and the state directory on the node belong to root.
             runAsUser: 0
             runAsGroup: 0
             allowPrivilegeEscalation: false

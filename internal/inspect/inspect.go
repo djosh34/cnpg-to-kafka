@@ -1,5 +1,4 @@
-// Package inspect reads Kafka records and prints Avro-decoded connection events.
-// It has no consumer group, offset commits, topic creation or schema writes.
+// Package inspect prints the connection events in the Kafka topic as JSON lines.
 package inspect
 
 import (
@@ -12,55 +11,57 @@ import (
 
 	"github.com/confluentinc/confluent-avro-go/v2"
 	"github.com/confluentinc/confluent-avro-go/v2/registry"
-	"github.com/djosh34/cnpg-to-kafka/internal/tlspolicy"
-	"github.com/djosh34/cnpg-to-kafka/processor/avroprocessor"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/kafka/configkafka"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/collector/confmap"
+	"go.opentelemetry.io/collector/confmap/provider/envprovider"
 	"go.opentelemetry.io/collector/confmap/provider/fileprovider"
+
+	"github.com/djosh34/cnpg-to-kafka/processor/avroprocessor"
 )
 
-// Run consumes from the beginning using the same native configuration as the
-// Collector. limit=0 follows until ctx ends; positive limits return after that
-// many decoded records. The caller supplies a deadline and owns the output file.
+// Run reads the topic from its first record and writes one JSON line per event.
+// It takes the brokers, the topic, the registry and the TLS settings from the
+// Collector config file. It returns after limit events, or when ctx ends if
+// limit is 0. It consumes the partitions directly.
 func Run(ctx context.Context, configPath string, out io.Writer, limit int) error {
-	if limit < 0 {
-		return errors.New("limit must not be negative")
-	}
-	kafka, topic, mapper, err := loadConfig(ctx, configPath)
+	kafka, topic, registryConfig, err := loadConfig(ctx, configPath)
 	if err != nil {
 		return err
 	}
-	tlsConfig, err := kafka.TLS.LoadTLSConfig(ctx)
-	if err != nil {
-		return fmt.Errorf("load Kafka TLS files: %w", err)
-	}
-	client, err := kgo.NewClient(
-		kgo.SeedBrokers(kafka.Brokers...), kgo.DialTLSConfig(tlsConfig),
-		kgo.ClientID("cnpg-to-kafka-inspect"), kgo.ConsumeTopics(topic),
+	opts := []kgo.Opt{
+		kgo.SeedBrokers(kafka.Brokers...),
+		kgo.ConsumeTopics(topic),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-	)
+	}
+	if kafka.TLS != nil {
+		tlsConfig, err := kafka.TLS.LoadTLSConfig(ctx)
+		if err != nil {
+			return fmt.Errorf("Kafka TLS: %w", err)
+		}
+		if tlsConfig != nil {
+			opts = append(opts, kgo.DialTLSConfig(tlsConfig))
+		}
+	}
+	client, err := kgo.NewClient(opts...)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
 
-	decoders := make([]*registry.Decoder, 0, len(mapper.Registry.URLs))
-	var clientErrors []error
-	for _, endpoint := range mapper.Registry.URLs {
-		registryClient, err := avroprocessor.NewRegistryClient(ctx, endpoint, mapper.Registry)
+	// Each message names its schema by ID. A decoder fetches that schema from
+	// its registry URL and caches it.
+	var decoders []*registry.Decoder
+	for _, url := range registryConfig.URLs {
+		registryClient, err := avroprocessor.NewRegistryClient(ctx, url, registryConfig)
 		if err != nil {
-			clientErrors = append(clientErrors, err)
-			continue
+			return err
 		}
-		decoders = append(decoders, NewDecoder(registryClient))
+		decoders = append(decoders, registry.NewDecoder(registryClient, registry.WithAPI(streamingAPI{avro.DefaultConfig})))
 	}
-	if len(decoders) == 0 {
-		return errors.Join(clientErrors...)
-	}
+
 	encoder := json.NewEncoder(out)
-	count := 0
-	for {
+	for count := 0; ; {
 		fetches := client.PollFetches(ctx)
 		if err := ctx.Err(); err != nil {
 			return err
@@ -68,89 +69,76 @@ func Run(ctx context.Context, configPath string, out io.Writer, limit int) error
 		if errs := fetches.Errors(); len(errs) > 0 {
 			return fmt.Errorf("Kafka fetch: %w", errs[0].Err)
 		}
-		iter := fetches.RecordIter()
-		for !iter.Done() {
+		for iter := fetches.RecordIter(); !iter.Done(); {
 			record := iter.Next()
 			var event avroprocessor.Event
 			var failures []error
-			// Native Decoder validates the five-byte prefix, fetches the schema
-			// by the actual wire ID (not configured version), and caches it.
 			for _, decoder := range decoders {
-				err = decoder.Decode(ctx, record.Value, &event)
+				err := decoder.Decode(ctx, record.Value, &event)
 				if err == nil {
+					failures = nil
 					break
 				}
 				failures = append(failures, err)
 			}
-			if err != nil {
-				return fmt.Errorf("decode %s/%d/%d: %w", record.Topic, record.Partition, record.Offset, errors.Join(failures...))
+			if len(failures) > 0 {
+				return fmt.Errorf("decode offset %d of partition %d: %w", record.Offset, record.Partition, errors.Join(failures...))
 			}
 			if err := encoder.Encode(event); err != nil {
 				return err
 			}
-			count++
-			if limit > 0 && count >= limit {
+			if count++; count == limit {
 				return nil
 			}
 		}
 	}
 }
 
-// NewDecoder shares the native wire-ID decoder with callers that also need
-// record-level assertions. The registry client owns schema lookup and caching.
-func NewDecoder(client *registry.Client) *registry.Decoder {
-	return registry.NewDecoder(client, registry.WithAPI(streamingAPI{API: avro.DefaultConfig}))
-}
-
-// The codec's byte-slice Unmarshal masks wrapped EOF from truncated data. Its
-// native streaming decoder preserves that error; framing and schema-ID caching
-// remain entirely in registry.Decoder.
+// streamingAPI decodes with the library's stream decoder. The library's
+// Unmarshal reports no error for a record that ends too early.
 type streamingAPI struct{ avro.API }
 
 func (a streamingAPI) Unmarshal(schema avro.Schema, data []byte, v any) error {
 	return a.NewDecoder(schema, bytes.NewReader(data)).Decode(v)
 }
 
-func loadConfig(ctx context.Context, path string) (configkafka.ClientConfig, string, avroprocessor.Config, error) {
+func loadConfig(ctx context.Context, path string) (configkafka.ClientConfig, string, avroprocessor.RegistryConfig, error) {
 	kafka := configkafka.NewDefaultClientConfig()
-	avro := *avroprocessor.NewFactory().CreateDefaultConfig().(*avroprocessor.Config)
+	avro := avroprocessor.NewFactory().CreateDefaultConfig().(*avroprocessor.Config)
+	fail := func(err error) (configkafka.ClientConfig, string, avroprocessor.RegistryConfig, error) {
+		return kafka, "", avro.Registry, fmt.Errorf("config %s: %w", path, err)
+	}
 	resolver, err := confmap.NewResolver(confmap.ResolverSettings{
-		URIs:              []string{"file:" + path},
-		ProviderFactories: []confmap.ProviderFactory{fileprovider.NewFactory()},
+		URIs:              []string{path},
+		DefaultScheme:     "file",
+		ProviderFactories: []confmap.ProviderFactory{fileprovider.NewFactory(), envprovider.NewFactory()},
 	})
 	if err != nil {
-		return kafka, "", avro, err
+		return fail(err)
 	}
 	defer resolver.Shutdown(context.Background())
 	cfg, err := resolver.Resolve(ctx)
 	if err != nil {
-		return kafka, "", avro, err
+		return fail(err)
 	}
 	avroConf, err := cfg.Sub("processors::avro")
 	if err != nil {
-		return kafka, "", avro, err
+		return fail(err)
 	}
-	if err := avroConf.Unmarshal(&avro); err != nil {
-		return kafka, "", avro, err
-	}
-	if err := avro.Validate(); err != nil {
-		return kafka, "", avro, err
+	if err := avroConf.Unmarshal(avro); err != nil {
+		return fail(err)
 	}
 	kafkaConf, err := cfg.Sub("exporters::kafka/cnpg")
 	if err != nil {
-		return kafka, "", avro, err
+		return fail(err)
 	}
-	// Reuse the native client configuration; producer/queue fields are irrelevant
-	// to a read-only consumer. Do not introduce an inspector config format.
+	// The exporter settings that are not about the connection are ignored.
 	if err := kafkaConf.Unmarshal(&kafka, confmap.WithIgnoreUnused()); err != nil {
-		return kafka, "", avro, err
+		return fail(err)
 	}
-	topic, ok := kafkaConf.Get("logs::topic").(string)
-	if !ok || topic == "" || !kafkaConf.IsSet("brokers") || len(kafka.Brokers) == 0 {
-		return kafka, "", avro, errors.New("exporters.kafka/cnpg requires brokers and logs.topic")
+	topic, _ := kafkaConf.Get("logs::topic").(string)
+	if topic == "" {
+		return fail(errors.New("exporters.kafka/cnpg.logs.topic is not set"))
 	}
-	if err := tlspolicy.ValidateClient(kafka.TLS); err != nil {
-		return kafka, "", avro, fmt.Errorf("Kafka TLS: %w", err)
-	}
-	return kafka, topic, avro, nil
+	return kafka, topic, avro.Registry, nil
 }

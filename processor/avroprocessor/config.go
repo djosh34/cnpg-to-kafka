@@ -1,47 +1,32 @@
-// Package avroprocessor maps native-selected connection attributes to Avro.
+// Package avroprocessor encodes connection-event log records as Avro.
 package avroprocessor
 
 import (
 	"errors"
-	"strconv"
 	"time"
 
-	"github.com/djosh34/cnpg-to-kafka/internal/tlspolicy"
 	"go.opentelemetry.io/collector/config/configtls"
 )
 
-// Config is the native Collector processor configuration.
+// Config is the configuration of the avro processor.
 type Config struct {
 	Registry RegistryConfig `mapstructure:"registry"`
 }
 
-// RegistryConfig selects one authoritative schema at startup. All endpoints must
-// share a logical schema-ID space and use the same mounted trust and identity.
+// RegistryConfig says where to fetch the schema at startup. The URLs are tried
+// in order and must all serve the same registry, so that schema IDs agree.
 type RegistryConfig struct {
-	URLs           []string               `mapstructure:"urls"`
-	Subject        string                 `mapstructure:"subject"`
+	URLs    []string `mapstructure:"urls"`
+	Subject string   `mapstructure:"subject"`
+	// Version is "latest" or a version number.
 	Version        string                 `mapstructure:"version"`
 	RequestTimeout time.Duration          `mapstructure:"request_timeout"`
 	TLS            configtls.ClientConfig `mapstructure:"tls"`
 }
 
-func (c *Config) Validate() error { return c.Registry.Validate() }
-
-func (c RegistryConfig) Validate() error {
-	if len(c.URLs) == 0 || c.Subject == "" {
-		return errors.New("registry requires a nonempty ordered urls list and subject")
+func (c *Config) Validate() error {
+	if len(c.Registry.URLs) == 0 || c.Registry.Subject == "" {
+		return errors.New("registry requires urls and subject")
 	}
-	if c.Version != "latest" {
-		version, err := strconv.Atoi(c.Version)
-		if err != nil || version <= 0 {
-			return errors.New("registry version must be latest or a positive decimal version")
-		}
-	}
-	if c.RequestTimeout <= 0 {
-		return errors.New("registry request_timeout must be positive and finite")
-	}
-	if c.TLS.CAFile == "" || c.TLS.CertFile == "" || c.TLS.KeyFile == "" {
-		return errors.New("registry mTLS requires ca_file, cert_file and key_file")
-	}
-	return tlspolicy.ValidateClient(&c.TLS)
+	return nil
 }

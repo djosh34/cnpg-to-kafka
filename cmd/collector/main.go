@@ -1,4 +1,5 @@
-// Command collector runs the minimal CNPG connection-event Collector.
+// Command collector runs the OpenTelemetry Collector with the components that
+// turn CloudNativePG connection logs into Kafka events.
 package main
 
 import (
@@ -9,6 +10,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/filelogreceiver"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/confmap"
+	"go.opentelemetry.io/collector/confmap/provider/envprovider"
 	"go.opentelemetry.io/collector/confmap/provider/fileprovider"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/extension"
@@ -20,6 +22,9 @@ import (
 	"github.com/djosh34/cnpg-to-kafka/processor/avroprocessor"
 )
 
+// version is set at build time with -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
 	if err := otelcol.NewCommand(settings()).Execute(); err != nil {
 		os.Exit(1)
@@ -30,19 +35,18 @@ func settings() otelcol.CollectorSettings {
 	return otelcol.CollectorSettings{
 		BuildInfo: component.BuildInfo{
 			Command:     "cnpg-to-kafka",
-			Description: "CNPG connection events to Kafka",
-			Version:     "0.1.0",
+			Description: "CloudNativePG connection events to Kafka",
+			Version:     version,
 		},
 		Factories: factories,
 		ConfigProviderSettings: otelcol.ConfigProviderSettings{
 			ResolverSettings: confmap.ResolverSettings{
-				URIs:              []string{"file:/etc/cnpg-to-kafka/config.yaml"},
-				DefaultScheme:     "file",
-				ProviderFactories: []confmap.ProviderFactory{fileprovider.NewFactory()},
-				ConverterFactories: []confmap.ConverterFactory{
-					confmap.NewConverterFactory(func(confmap.ConverterSettings) confmap.Converter {
-						return kafkaTLSValidator{}
-					}),
+				// The --config flag replaces this default.
+				URIs:          []string{"file:/etc/cnpg-to-kafka/config.yaml"},
+				DefaultScheme: "file",
+				ProviderFactories: []confmap.ProviderFactory{
+					fileprovider.NewFactory(),
+					envprovider.NewFactory(),
 				},
 			},
 		},
@@ -50,7 +54,7 @@ func settings() otelcol.CollectorSettings {
 }
 
 func factories() (otelcol.Factories, error) {
-	// Preserve the upstream filelog alias for the canonical file_log type.
+	// MakeFactoryMap also registers the receiver under its older name, filelog.
 	receivers, err := otelcol.MakeFactoryMap[receiver.Factory](filelogreceiver.NewFactory())
 	if err != nil {
 		return otelcol.Factories{}, err

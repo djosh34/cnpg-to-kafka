@@ -1,17 +1,18 @@
-# One native Collector configuration. Replace example endpoints, namespace,
-# subject, role list, and mounted certificate paths for your installation.
+# Example configuration. Change the namespace, the excluded roles, the Kafka and
+# registry addresses, the topic, the subject and the certificate paths to yours.
 receivers:
-  filelog/cnpg:
-    # Namespace selection is the database_ prefix in the standard pod-log path.
+  file_log/cnpg:
+    # Pod logs are at /var/log/pods/<namespace>_<pod>_<uid>/<container>/<n>.log.
+    # This reads every pod in the namespace "database".
     include: [/var/log/pods/database_*/*/*.log*]
     exclude: [/var/log/pods/*/*/*.gz]
     start_at: beginning
     include_file_path: true
     storage: file_storage
     max_log_size: 1MiB
-    # v0.162's native container parser has shared timestamp state: serialize
-    # reads to avoid its multi-reader race. All matched files are still polled
-    # in successive batches; zero max_batches means no per-poll source limit.
+    # The container operator of Collector v0.162 has a data race when it reads
+    # several files at once, so read one file at a time. With max_batches 0 each
+    # poll still reads every matched file.
     max_concurrent_files: 1
     max_batches: 0
     poll_interval: 200ms
@@ -24,24 +25,25 @@ receivers:
       - type: container
         id: container
         on_error: drop
-      # Optional pod-name regex: .* means no extra restriction. This operates
-      # on path metadata, before decoding unrelated application JSON.
+      # Keeps only pods whose name matches the regex. ".*" keeps all of them.
       - type: filter
         id: select-pods
         expr: 'not (resource["k8s.pod.name"] matches ".*")'
         on_error: drop
+      # Lines that are not JSON are normal in pod logs. drop_quiet drops them
+      # without logging an error for each.
       - type: json_parser
         id: cnpg-json
         parse_to: body
-        on_error: drop
+        on_error: drop_quiet
       - type: filter
         id: postgres-records
         expr: 'body.logger != "postgres" or body.record == nil'
         on_error: drop
-      # Explicit authentication failures (class 28), or a narrowly recognized
-      # database CONNECT denial (42501), not arbitrary FATAL/permission errors.
-      # Receipt/authentication progress is ignored; replication authorization
-      # is also a successful login unless its exact role is excluded.
+      # LOGIN_FAILED is a FATAL record with SQLSTATE 28P01 or 28000, or with
+      # 42501 and "permission denied for database". LOGIN is "connection
+      # authorized:" or "replication connection authorized:". LOGOUT is
+      # "disconnection:". Every other record gets "" and the next filter drops it.
       - type: add
         id: classify
         field: attributes.eventtype
@@ -59,7 +61,8 @@ receivers:
       - type: filter
         id: connection-events
         expr: 'attributes.eventtype == ""'
-      # Exact, case-sensitive exclusions apply ONLY to successful sessions.
+      # Drops logins and logouts of these roles. The match is exact and
+      # case-sensitive. Their failed logins are still published.
       - type: filter
         id: excluded-roles
         expr: 'attributes.eventtype != "LOGIN_FAILED" and body.record.user_name in ["postgres", "streaming_replica"]'
@@ -76,8 +79,8 @@ receivers:
         id: client
         field: attributes.hostname
         value: 'EXPR(body.record.connection_from ?? "")'
-      # PostgreSQL CSV connection_from is host:port; accept bracketed IPv6,
-      # IPv4 and DNS hosts without DNS lookup. Bare hosts/[local] stay intact.
+      # connection_from is host:port. Strip the port and the brackets of an
+      # IPv6 address. A value without a port, such as [local], stays as it is.
       - type: regex_parser
         id: client-with-port
         if: 'attributes.hostname matches "^.+:[0-9]+$"'
@@ -91,32 +94,26 @@ processors:
     registry:
       urls: [https://registry-1.example.com:8081, https://registry-2.example.com:8081]
       subject: cnpg-connections-value
-      version: latest # Or a quoted positive decimal version, e.g. "3".
+      version: latest # Or a version number in quotes, such as "3".
       request_timeout: 10s
       tls:
         ca_file: /etc/cnpg-to-kafka/tls/ca.crt
         cert_file: /etc/cnpg-to-kafka/tls/tls.crt
         key_file: /etc/cnpg-to-kafka/tls/tls.key
-        include_system_ca_certs_pool: false
-        insecure: false
-        insecure_skip_verify: false
 
 exporters:
   kafka/cnpg:
     brokers: [kafka.example.com:9093]
     client_id: cnpg-to-kafka
     logs:
-      topic: cnpg-connections # Already provisioned externally.
+      topic: cnpg-connections # Must exist. The Collector does not create it.
       encoding: raw
     tls:
       ca_file: /etc/cnpg-to-kafka/tls/ca.crt
       cert_file: /etc/cnpg-to-kafka/tls/tls.crt
       key_file: /etc/cnpg-to-kafka/tls/tls.key
-      include_system_ca_certs_pool: false
-      insecure: false
-      insecure_skip_verify: false
     producer:
-      required_acks: all # Enables franz-go's default idempotent production.
+      required_acks: all # The Kafka client then also produces idempotently.
       allow_auto_topic_creation: false
     timeout: 30s
     retry_on_failure:
@@ -128,7 +125,7 @@ exporters:
       enabled: true
       storage: file_storage
       sizer: bytes
-      queue_size: 67108864 # 64 MiB serialized requests, not an on-disk byte count.
+      queue_size: 67108864 # 64 MiB of serialized requests. The file on disk is larger.
       num_consumers: 1
       block_on_overflow: true
 
@@ -138,13 +135,13 @@ extensions:
     create_directory: true
     directory_permissions: "0700"
     fsync: true
-    max_size: 268435456 # 256 MiB per native bbolt database; leave filesystem headroom.
+    max_size: 268435456 # 256 MiB for each of the two database files.
 
 service:
   extensions: [file_storage]
   pipelines:
     logs:
-      receivers: [filelog/cnpg]
+      receivers: [file_log/cnpg]
       processors: [avro]
       exporters: [kafka/cnpg]
   telemetry:
