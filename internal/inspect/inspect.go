@@ -2,12 +2,14 @@
 package inspect
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 
+	"github.com/confluentinc/confluent-avro-go/v2"
 	"github.com/confluentinc/confluent-avro-go/v2/registry"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/kafka/configkafka"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -21,7 +23,7 @@ import (
 // Run reads the topic from its first record and writes one JSON line per event.
 // It takes the brokers, the topic, the registry and the TLS settings from the
 // Collector config file. It returns after limit events, or when ctx ends if
-// limit is 0. It joins no consumer group and commits no offsets.
+// limit is 0. It consumes the partitions directly.
 func Run(ctx context.Context, configPath string, out io.Writer, limit int) error {
 	kafka, topic, registryConfig, err := loadConfig(ctx, configPath)
 	if err != nil {
@@ -55,7 +57,7 @@ func Run(ctx context.Context, configPath string, out io.Writer, limit int) error
 		if err != nil {
 			return err
 		}
-		decoders = append(decoders, registry.NewDecoder(registryClient))
+		decoders = append(decoders, registry.NewDecoder(registryClient, registry.WithAPI(streamingAPI{avro.DefaultConfig})))
 	}
 
 	encoder := json.NewEncoder(out)
@@ -90,6 +92,14 @@ func Run(ctx context.Context, configPath string, out io.Writer, limit int) error
 			}
 		}
 	}
+}
+
+// streamingAPI decodes with the library's stream decoder. The library's
+// Unmarshal reports no error for a record that ends too early.
+type streamingAPI struct{ avro.API }
+
+func (a streamingAPI) Unmarshal(schema avro.Schema, data []byte, v any) error {
+	return a.NewDecoder(schema, bytes.NewReader(data)).Decode(v)
 }
 
 func loadConfig(ctx context.Context, path string) (configkafka.ClientConfig, string, avroprocessor.RegistryConfig, error) {

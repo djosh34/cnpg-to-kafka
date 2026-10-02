@@ -57,7 +57,7 @@ receivers:
           body.record.message startsWith "replication connection authorized:")
           ? "LOGIN" : body.record.message != nil and
           body.record.message startsWith "disconnection:" ? "LOGOUT" : "")
-        on_error: drop_quiet
+        on_error: drop
       - type: filter
         id: connection-events
         expr: 'attributes.eventtype == ""'

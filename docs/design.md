@@ -1,7 +1,5 @@
 # Design
 
-This page records the decisions behind cnpg-to-kafka and the reason for each.
-
 ## A Collector build, not a new program
 
 The job has four parts. Follow pod-log files through rotation, pick out the
@@ -135,10 +133,9 @@ and wrong passwords, while the kubelet rotated the log files and one container
 restarted. The recording holds every file operation in the pod-log directory
 with its bytes and its time: create, append, rename, remove.
 
-Hand-written log lines would only contain what the author expected PostgreSQL
-and the kubelet to write. The recording also contains what they wrote that
-nobody expected, such as the two failed-login records that one wrong password
-produces.
+The recording holds what PostgreSQL and the kubelet wrote, including the two
+failed-login records that one wrong password produces. Hand-written log lines
+hold only what their author knew to write.
 
 `internal/replay` applies the recording to a directory with ordinary file
 system calls. The Collector under test reads that directory the way it reads
@@ -202,6 +199,7 @@ not build on a tag. It adds the version tag to the `sha-<commit>` image that
 `main` already built and scanned, and creates the GitHub release. A stable
 version also moves `latest`. A tag on a commit that has no image fails.
 
-The released image is therefore byte for byte the one that was tested on `main`.
+The released image is therefore byte for byte the one that was built and scanned
+on `main`.
 For the same reason the binary's `--version` prints the commit it was built
 from, not the release tag.

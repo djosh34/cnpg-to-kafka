@@ -37,7 +37,7 @@ import (
 // TestRecording replays the recorded CloudNativePG pod logs, with a Kafka outage
 // in the middle, and checks the events that arrive in the topic.
 func TestRecording(t *testing.T) {
-	p := startPipeline(t, "capture")
+	p := startPipeline(t, "capture", "")
 	recording, err := os.Open("../../testdata/capture/operations.jsonl")
 	if err != nil {
 		t.Fatal(err)
@@ -141,44 +141,32 @@ func TestEventRules(t *testing.T) {
 		{`{"logger":"postgres","record":42}`, nil},
 		{`{"logger":"postgres","record":`, nil},
 		{"plain text", nil},
-
-		{session("disconnection: session time: 0:00:02", "last", "10.1.2.3:54321"), event("LOGOUT", "last", "10.1.2.3", "app")},
 	}
 
-	p := startPipeline(t, "database")
-	write := func(namespace string, lines ...string) {
-		t.Helper()
-		dir := filepath.Join(p.pods, namespace+"_cnpg-1_00000000-0000-0000-0000-000000000001", "postgres")
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		file, err := os.OpenFile(filepath.Join(dir, "0.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer file.Close()
-		for _, line := range lines {
-			// The container runtime's log format: time, stream, F for a full line.
-			if _, err := fmt.Fprintln(file, "2026-10-01T12:00:00.000000000Z stdout F "+line); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
+	p := startPipeline(t, "database", "")
+	p.writeLog(t, "other", "cnpg-1", session("connection authorized: user=mallory", "mallory", "10.1.2.3:54321"))
 	var want []avroprocessor.Event
-	for i, c := range cases {
+	for _, c := range cases {
+		p.writeLog(t, "database", "cnpg-1", c.line)
 		if c.want != nil {
 			want = append(want, *c.want)
 		}
-		if i == len(cases)-1 {
-			// Wait for the events before the last one. An event from a line
-			// that should give none then shows up ahead of the last event.
-			p.events(t, len(want)-1)
-		}
-		write("database", c.line)
-		if i == 0 {
-			write("other", session("connection authorized: user=mallory", "mallory", "10.1.2.3:54321"))
-		}
 	}
+	if got := p.events(t, len(want)); !slices.Equal(got, want) {
+		t.Errorf("events:\n got %+v\nwant %+v", got, want)
+	}
+}
+
+// TestPodRegex narrows the select-pods operator to the instance pods of one
+// cluster.
+func TestPodRegex(t *testing.T) {
+	login := func(role string) string {
+		return `{"logger":"postgres","record":{"message":"connection authorized: user=` + role + `","user_name":"` + role + `","connection_from":"10.1.2.3:54321","database_name":"app"}}`
+	}
+	p := startPipeline(t, "database", "^cnpg-[0-9]+$")
+	p.writeLog(t, "database", "cnpg-1-initdb-x7k2p", login("bootstrap"))
+	p.writeLog(t, "database", "cnpg-1", login("alice"))
+	want := []avroprocessor.Event{{Role: "alice", Hostname: "10.1.2.3", EventType: "LOGIN", Context: avroprocessor.EventContext{Database: "app"}}}
 	if got := p.events(t, len(want)); !slices.Equal(got, want) {
 		t.Errorf("events:\n got %+v\nwant %+v", got, want)
 	}
@@ -196,8 +184,9 @@ type pipeline struct {
 	serverTLS *tls.Config
 }
 
-// startPipeline starts a Collector that reads the pod logs of one namespace.
-func startPipeline(t *testing.T, namespace string) *pipeline {
+// startPipeline starts a Collector that reads the pod logs of one namespace. A
+// podRegex other than "" replaces the regex of the select-pods operator.
+func startPipeline(t *testing.T, namespace, podRegex string) *pipeline {
 	dir := t.TempDir()
 	p := &pipeline{pods: filepath.Join(dir, "pods"), config: filepath.Join(dir, "config.json"), kafkaDir: filepath.Join(dir, "kafka")}
 	if err := os.Mkdir(p.pods, 0o755); err != nil {
@@ -242,8 +231,15 @@ func startPipeline(t *testing.T, namespace string) *pipeline {
 	if err != nil {
 		t.Fatal(err)
 	}
+	settingsMap := conf.ToStringMap()
+	receiver := settingsMap["receivers"].(map[string]any)["file_log/cnpg"].(map[string]any)
+	for _, operator := range receiver["operators"].([]any) {
+		if operator := operator.(map[string]any); operator["id"] == "select-pods" && podRegex != "" {
+			operator["expr"] = fmt.Sprintf(`not (resource["k8s.pod.name"] matches %q)`, podRegex)
+		}
+	}
 	// JSON is YAML, so the Collector reads this file like any config file.
-	data, err := json.Marshal(conf.ToStringMap())
+	data, err := json.Marshal(settingsMap)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,24 +292,54 @@ func (p *pipeline) startKafka(t *testing.T) {
 	p.kafkaPort, _ = strconv.Atoi(port)
 }
 
-// events reads the first n events of the topic with the inspector and logs them.
-func (p *pipeline) events(t *testing.T, n int) []avroprocessor.Event {
+// writeLog appends lines to the postgres container log of a pod, in the
+// container runtime's format: time, stream, F for a full line, the line.
+func (p *pipeline) writeLog(t *testing.T, namespace, pod string, lines ...string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	var out bytes.Buffer
-	runErr := inspect.Run(ctx, p.config, &out, n)
-	var events []avroprocessor.Event
-	for line := range bytes.Lines(out.Bytes()) {
-		t.Logf("%s", bytes.TrimSpace(line))
-		var event avroprocessor.Event
-		if err := json.Unmarshal(line, &event); err != nil {
+	dir := filepath.Join(p.pods, namespace+"_"+pod+"_00000000-0000-0000-0000-000000000001", "postgres")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(filepath.Join(dir, "0.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(file, "2026-10-01T12:00:00.000000000Z stdout F "+line); err != nil {
 			t.Fatal(err)
 		}
-		events = append(events, event)
 	}
-	if runErr != nil {
-		t.Errorf("read %d of %d events: %v", len(events), n, runErr)
+}
+
+// events reads the topic with the inspector and logs what it reads. It waits
+// for n events, then two more seconds for an event that should not be there.
+func (p *pipeline) events(t *testing.T, n int) []avroprocessor.Event {
+	t.Helper()
+	read := func(limit int, timeout time.Duration) ([]avroprocessor.Event, error) {
+		ctx, cancel := context.WithTimeout(t.Context(), timeout)
+		defer cancel()
+		var out bytes.Buffer
+		runErr := inspect.Run(ctx, p.config, &out, limit)
+		var events []avroprocessor.Event
+		for line := range bytes.Lines(out.Bytes()) {
+			var event avroprocessor.Event
+			if err := json.Unmarshal(line, &event); err != nil {
+				t.Fatal(err)
+			}
+			events = append(events, event)
+		}
+		return events, runErr
+	}
+	if _, err := read(n, 30*time.Second); err != nil {
+		t.Errorf("waiting for %d events: %v", n, err)
+	}
+	events, err := read(n+1, 2*time.Second)
+	if err == nil {
+		t.Errorf("the topic has more than %d events", n)
+	}
+	for _, event := range events {
+		t.Logf("%+v", event)
 	}
 	return events
 }

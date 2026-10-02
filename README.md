@@ -79,9 +79,9 @@ bin/cnpg-to-kafka --config config.yaml
 
 ## Inspect
 
-`cmd/inspect` prints the events in the topic as JSON lines, oldest first. It
-takes the brokers, the topic, the registry and the certificates from the same
-config file.
+`cmd/inspect` prints the events in the topic as JSON lines, starting at the
+earliest offset of each partition. It takes the brokers, the topic, the registry
+and the certificates from the same config file.
 
 ```sh
 go run ./cmd/inspect --config config.yaml --limit 10

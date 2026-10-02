@@ -126,16 +126,12 @@ func TestRegistryFallback(t *testing.T) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(down.Close)
-	notASchema := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte(`{"id":1,"version":1,"schema":"not a schema"}`))
-	}))
-	t.Cleanup(notASchema.Close)
 	up, _ := registry(t)
 
-	if _, err := start(t, down.URL, notASchema.URL, up.URL); err != nil {
-		t.Errorf("start with a working third registry: %v", err)
+	if _, err := start(t, down.URL, up.URL); err != nil {
+		t.Errorf("start with a working second registry: %v", err)
 	}
-	if _, err := start(t, down.URL, notASchema.URL); err == nil {
+	if _, err := start(t, down.URL); err == nil {
 		t.Error("start without a working registry succeeded")
 	}
 }

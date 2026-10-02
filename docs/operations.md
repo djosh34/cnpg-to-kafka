@@ -86,7 +86,8 @@ through these operators. After a change to the rules, add a line for it and run
 `go test ./cmd/collector`.
 
 To publish different fields, change the schema, the `Event` struct in
-`processor/avroprocessor/event.go` and the operators together.
+`processor/avroprocessor/event.go`, the attribute mapping in `factory.go` and
+the operators together.
 
 ## Schema Registry
 
@@ -147,8 +148,8 @@ disk.
 On SIGTERM the Collector sends what is in flight and exits. During a Kafka
 outage it waits for Kafka, because giving up on a request that Kafka may have
 accepted would break the idempotent producer's sequence. Kubernetes kills the
-pod after `terminationGracePeriodSeconds`, 60 in the example. Nothing is lost by
-that. The queue is on disk and the next pod sends it.
+pod after `terminationGracePeriodSeconds`, 60 in the example. The next pod sends
+the events that are saved in the queue.
 
 ## Logs
 

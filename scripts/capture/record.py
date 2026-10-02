@@ -29,7 +29,7 @@ while "Watches established" not in watch.stderr.readline():
         raise SystemExit("inotifywait failed establishing watches")
 
 start = time.monotonic()
-files = {}  # relative path -> open file. An open file keeps its position across a rename.
+files = {}  # Open files by relative path. They keep their read positions across renames.
 known_dirs = set()
 ops = (output / "operations.jsonl").open("w")
 events = (output / "inotify.log").open("w")
