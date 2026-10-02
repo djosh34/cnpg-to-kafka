@@ -1,5 +1,4 @@
-// Package replay applies recorded pod-log operations to a real filesystem.
-// It is test tooling, not a Collector receiver or runtime file watcher.
+// Package replay writes a recording of pod-log file operations to a directory.
 package replay
 
 import (
@@ -8,13 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"time"
 )
 
-// Operation records paths relative to /var/log/pods and unmodified file bytes.
-// JSON encodes Data as standard base64. AtMS is elapsed capture time.
+// Operation is one line of a recording. Path and To are relative to the pod-log
+// directory, /var/log/pods on a node. AtMS is the time since the recording
+// started. Data is base64 in the JSON.
 type Operation struct {
 	AtMS int64  `json:"at_ms"`
 	Op   string `json:"op"`
@@ -23,13 +22,11 @@ type Operation struct {
 	Data []byte `json:"data,omitempty"`
 }
 
-// Run applies operations in recorded order beneath an existing root directory.
-// A speed of 10 replays at ten times capture speed; zero skips all waits.
-// Start the actual Collector before Run so filelog observes ordinary disk changes.
+// Run applies the recorded operations in order inside the existing directory
+// rootPath. It waits between operations as the recording did, divided by speed.
+// A speed of 0 does not wait.
 func Run(ctx context.Context, rootPath string, recording io.Reader, speed float64) error {
-	if speed < 0 || math.IsNaN(speed) || math.IsInf(speed, 0) {
-		return errors.New("replay speed must be finite and nonnegative")
-	}
+	// os.Root refuses paths that leave the directory.
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
 		return err
@@ -43,25 +40,17 @@ func Run(ctx context.Context, rootPath string, recording io.Reader, speed float6
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
-			return fmt.Errorf("operation %d: decode: %w", n, err)
+			return fmt.Errorf("operation %d: %w", n, err)
+		}
+		if speed > 0 {
+			due := start.Add(time.Duration(float64(op.AtMS) * float64(time.Millisecond) / speed))
+			select {
+			case <-ctx.Done():
+			case <-time.After(time.Until(due)):
+			}
 		}
 		if err := ctx.Err(); err != nil {
 			return err
-		}
-		if op.AtMS < 0 {
-			return fmt.Errorf("operation %d: negative capture time", n)
-		}
-		if speed > 0 {
-			delay := time.Duration(float64(op.AtMS)*float64(time.Millisecond)/speed) - time.Since(start)
-			if delay > 0 {
-				timer := time.NewTimer(delay)
-				select {
-				case <-ctx.Done():
-					timer.Stop()
-					return ctx.Err()
-				case <-timer.C:
-				}
-			}
 		}
 		if err := apply(root, op); err != nil {
 			return fmt.Errorf("operation %d (%s %q): %w", n, op.Op, op.Path, err)
@@ -89,6 +78,6 @@ func apply(root *os.Root, op Operation) error {
 	case "remove":
 		return root.Remove(op.Path)
 	default:
-		return fmt.Errorf("unsupported recorded operation %q", op.Op)
+		return errors.New("unknown operation")
 	}
 }

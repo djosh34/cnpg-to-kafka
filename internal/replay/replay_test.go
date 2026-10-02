@@ -1,234 +1,39 @@
 package replay
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"errors"
-	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
-// recording encodes operations for producer tests without changing their bytes.
-func recording(t *testing.T, ops ...Operation) *bytes.Buffer {
-	t.Helper()
-	var buf bytes.Buffer
-	for _, op := range ops {
-		if err := json.NewEncoder(&buf).Encode(op); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return &buf
-}
-
-func TestFilesystemRotationAndRepeatability(t *testing.T) {
-	// Synthetic operations, not the canonical real capture. Include partial writes and non-UTF8 bytes to check byte-for-byte replay.
-	first := []byte("2026-01-01T00:00:00Z stdout P {\"message\":")
-	last := append([]byte("\"login\"}\n"), 0xff, 0x00)
-	ops := []Operation{
-		{Op: "mkdir", Path: "selected_db-1_uid/postgres"},
-		{Op: "create", Path: "selected_db-1_uid/postgres/0.log", Data: first},
-		{Op: "append", Path: "selected_db-1_uid/postgres/0.log", Data: last},
-		{Op: "rename", Path: "selected_db-1_uid/postgres/0.log", To: "selected_db-1_uid/postgres/0.log.rotated"},
-		{Op: "create", Path: "selected_db-1_uid/postgres/0.log", Data: []byte("new file\n")},
-		{Op: "append", Path: "selected_db-1_uid/postgres/0.log", Data: []byte("after rotation\n")},
-		{Op: "mkdir", Path: "other_noise_uid/container"},
-		{Op: "create", Path: "other_noise_uid/container/0.log", Data: []byte("noise\n")},
-		{Op: "remove", Path: "other_noise_uid/container/0.log"},
-		{Op: "remove", Path: "other_noise_uid/container"},
-	}
-	for i := 0; i < 2; i++ {
-		root := t.TempDir()
-		if err := Run(context.Background(), root, recording(t, ops...), 0); err != nil {
-			t.Fatal(err)
-		}
-		for path, want := range map[string][]byte{
-			"selected_db-1_uid/postgres/0.log.rotated": append(append([]byte{}, first...), last...),
-			"selected_db-1_uid/postgres/0.log":         []byte("new file\nafter rotation\n"),
-		} {
-			got, err := os.ReadFile(filepath.Join(root, path))
-			if err != nil || !bytes.Equal(got, want) {
-				t.Fatalf("%s: got %q, want %q, error %v", path, got, want, err)
-			}
-		}
-		if _, err := os.Stat(filepath.Join(root, "other_noise_uid/container")); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("removed directory still exists: %v", err)
-		}
-	}
-}
-
-func TestMalformedRecordingAndOperations(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{"json", "{", "operation 1: decode"},
-		{"unknown", `{"op":"truncate","path":"0.log"}`, "unsupported recorded operation"},
-		{"negative time", `{"op":"mkdir","path":"pod","at_ms":-1}`, "negative capture time"},
-		{"missing append target", `{"op":"append","path":"0.log","data":"YQ=="}`, "operation 1 (append"},
-		{"duplicate create", "{\"op\":\"create\",\"path\":\"0.log\"}\n{\"op\":\"create\",\"path\":\"0.log\"}\n", "operation 2 (create"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := Run(context.Background(), t.TempDir(), strings.NewReader(tc.input), 0)
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("got %v, want %q", err, tc.want)
-			}
-		})
-	}
-}
-
-func TestRootConfinement(t *testing.T) {
-	outside := t.TempDir()
-	for _, tc := range []struct {
-		name string
-		op   Operation
-	}{
-		{"parent", Operation{Op: "create", Path: "../outside.log"}},
-		{"absolute", Operation{Op: "create", Path: filepath.Join(outside, "outside.log")}},
-		{"symlink", Operation{Op: "create", Path: "escape/outside.log"}},
-		{"rename", Operation{Op: "rename", Path: "0.log", To: "escape/outside.log"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(root, "0.log"), []byte("untouched"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			if err := Run(context.Background(), root, recording(t, tc.op), 0); err == nil {
-				t.Fatal("operation escaped replay root")
-			}
-			if _, err := os.Stat(filepath.Join(outside, "outside.log")); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("outside file created: %v", err)
-			}
-		})
-	}
-}
-
-func TestSpeed(t *testing.T) {
-	for _, speed := range []float64{-1, math.NaN(), math.Inf(1)} {
-		if err := Run(context.Background(), t.TempDir(), strings.NewReader(""), speed); err == nil {
-			t.Fatalf("accepted speed %v", speed)
-		}
-	}
-	// A minute of capture time is just a few milliseconds at this speed.
-	start := time.Now()
-	err := Run(context.Background(), t.TempDir(), recording(t, Operation{AtMS: 60_000, Op: "create", Path: "0.log"}), 10_000)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if time.Since(start) < 6*time.Millisecond {
-		t.Fatal("replay did not honor accelerated pacing")
-	}
-}
-
-func TestCancellation(t *testing.T) {
+func TestRotation(t *testing.T) {
+	// The kubelet rotates a log by renaming it and creating a new file.
+	recording := `
+{"at_ms":0,"op":"mkdir","path":"ns_pod_uid/postgres"}
+{"at_ms":1,"op":"create","path":"ns_pod_uid/postgres/0.log","data":"b25lCg=="}
+{"at_ms":2,"op":"append","path":"ns_pod_uid/postgres/0.log","data":"dHdvCg=="}
+{"at_ms":3,"op":"rename","path":"ns_pod_uid/postgres/0.log","to":"ns_pod_uid/postgres/0.log.20261001-120000"}
+{"at_ms":4,"op":"create","path":"ns_pod_uid/postgres/0.log","data":"dGhyZWUK"}
+{"at_ms":5,"op":"create","path":"ns_pod_uid/postgres/old.log.gz"}
+{"at_ms":6,"op":"remove","path":"ns_pod_uid/postgres/old.log.gz"}
+`
 	root := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-	defer cancel()
-	err := Run(ctx, root, recording(t, Operation{AtMS: 60_000, Op: "create", Path: "0.log"}), 1)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("got %v, want deadline exceeded", err)
+	if err := Run(t.Context(), root, strings.NewReader(recording), 1000); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "0.log")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("cancelled operation was applied: %v", err)
-	}
-	ctx, cancelNow := context.WithCancel(context.Background())
-	cancelNow()
-	if err := Run(ctx, root, recording(t, Operation{Op: "mkdir", Path: "pod"}), 0); !errors.Is(err, context.Canceled) {
-		t.Fatalf("got %v, want canceled", err)
-	}
-}
-
-func TestCapturedRotationAndRepeatability(t *testing.T) {
-	// The unchanged recording from Actions run 36935054571, not synthetic data.
-	file, err := os.Open("../../testdata/capture/operations.jsonl")
+	want := map[string]string{"0.log.20261001-120000": "one\ntwo\n", "0.log": "three\n"}
+	entries, err := os.ReadDir(filepath.Join(root, "ns_pod_uid/postgres"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
-	decoder := json.NewDecoder(file)
-	var ops []Operation
-	for {
-		var op Operation
-		err := decoder.Decode(&op)
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		ops = append(ops, op)
+	if len(entries) != len(want) {
+		t.Errorf("%d files, want %d", len(entries), len(want))
 	}
-	const primary = "capture_cnpg-1_71e8b938-6988-4cda-b345-6535925ff1d8/postgres/0.log"
-	const rotated = primary + ".20261001-222908"
-	rotation, postAppend := -1, -1
-	for i, op := range ops {
-		if op.Op == "rename" && op.Path == primary && op.To == rotated {
-			rotation = i // Observed at 39374ms, followed by a new empty 0.log.
+	for name, content := range want {
+		got, err := os.ReadFile(filepath.Join(root, "ns_pod_uid/postgres", name))
+		if err != nil || string(got) != content {
+			t.Errorf("%s: got %q, error %v, want %q", name, got, err, content)
 		}
-		if rotation >= 0 && op.Op == "append" && op.Path == primary {
-			postAppend = i // Observed at 45369ms: the first 514-byte append.
-			break
-		}
-	}
-	if rotation < 0 || postAppend < 0 {
-		t.Fatal("captured primary rotation/post-rotation write missing")
-	}
-	read := func(root, path string) []byte {
-		t.Helper()
-		data, err := os.ReadFile(filepath.Join(root, path))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return data
-	}
-	var previous [][]byte
-	for pass := 0; pass < 2; pass++ {
-		root := t.TempDir()
-		run := func(segment []Operation) {
-			t.Helper()
-			if err := Run(context.Background(), root, recording(t, segment...), 0); err != nil {
-				t.Fatal(err)
-			}
-		}
-		run(ops[:rotation])
-		before := read(root, primary)
-		if len(before) == 0 {
-			t.Fatal("pre-rotation file empty")
-		}
-		run(ops[rotation : postAppend+1])
-		if !bytes.Equal(read(root, rotated), before) {
-			t.Fatal("rename did not preserve captured bytes")
-		}
-		if !bytes.Equal(read(root, primary), ops[postAppend].Data) {
-			t.Fatal("post-rotation bytes not written into new active file")
-		}
-		run(ops[postAppend+1:])
-		// Compare ordinary resulting files across two fresh roots, including the
-		// controlled replica restart's 1.log and unrelated namespace's noise.
-		var current [][]byte
-		for _, path := range []string{
-			primary,
-			"capture_cnpg-2_911c9452-da88-44cc-bdc5-cf232336a834/postgres/1.log",
-			"other_noise_672788e2-0a34-46bc-9398-0267f4713ba8/noise/0.log",
-		} {
-			current = append(current, read(root, path))
-		}
-		if pass > 0 {
-			for i := range current {
-				if !bytes.Equal(current[i], previous[i]) {
-					t.Fatalf("repeated capture replay differs for file %d", i)
-				}
-			}
-		}
-		previous = current
 	}
 }

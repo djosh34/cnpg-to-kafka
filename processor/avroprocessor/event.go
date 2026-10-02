@@ -1,7 +1,8 @@
 package avroprocessor
 
-// Event is the public example schema's handwritten mapping. Fork this and the
-// example schema for a private schema; no private-schema compatibility is implied.
+// Event is the Go form of schema/connection-event.avsc. To publish a different
+// schema, change this struct, the attribute mapping in factory.go and the schema
+// together.
 type Event struct {
 	Role      string       `avro:"role" json:"role"`
 	Hostname  string       `avro:"hostname" json:"hostname"`
@@ -9,7 +10,6 @@ type Event struct {
 	Context   EventContext `avro:"context" json:"context"`
 }
 
-// EventContext is the sample's single nested record.
 type EventContext struct {
 	Database string `avro:"database" json:"database"`
 }
