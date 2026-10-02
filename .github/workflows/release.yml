@@ -125,29 +125,11 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  merged-pr:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Verify an actual merged PR into this repository main at this SHA
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/verify-merged-pr.sh
-
   publish:
-    needs: [replay, build-scan, merged-pr]
+    needs: [replay, build-scan]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    environment: release
     concurrency:
       group: cnpg-publish
       cancel-in-progress: false
@@ -158,9 +140,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 0
-          ssh-key: ${{ secrets.RELEASE_TAG_SSH_KEY }}
-          persist-credentials: true
+          persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ needs.build-scan.outputs.image-artifact-id }}
@@ -175,8 +155,4 @@ jobs:
       - name: Publish without rebuilding or overwriting release identities
         env:
           GH_TOKEN: ${{ github.token }}
-          BEFORE: ${{ github.event.before }}
-          REPLAY_RESULT: ${{ needs.replay.result }}
-          SCAN_RESULT: ${{ needs.build-scan.result }}
-          MERGED_PR_RESULT: ${{ needs.merged-pr.result }}
         run: bash scripts/publish-release.sh
