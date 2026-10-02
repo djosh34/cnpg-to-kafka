@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Deliberate test capture only: translate inotifywait events and raw file reads."""
+"""Record what happens to pod-log files for 300 seconds.
+
+Usage: record.py POD_LOG_DIR OUTPUT_DIR. Writes OUTPUT_DIR/operations.jsonl, one
+file operation per line, in the format that internal/replay reads. inotifywait
+reports which file changed, and this script reads the new bytes from the file.
+"""
 import base64
 import json
 import os
@@ -11,7 +16,7 @@ import time
 
 root, output = Path(sys.argv[1]), Path(sys.argv[2])
 output.mkdir(parents=True, exist_ok=True)
-# Only synthetic playground namespaces, never arbitrary node logs.
+# Only the two namespaces that run.sh creates.
 selected = sorted(root.glob("capture_*")) + sorted(root.glob("other_*"))
 if not selected:
     raise SystemExit("no capture pod directories")
@@ -24,7 +29,7 @@ while "Watches established" not in watch.stderr.readline():
         raise SystemExit("inotifywait failed establishing watches")
 
 start = time.monotonic()
-files = {}  # relative path -> open raw file; open descriptors survive real rotation
+files = {}  # relative path -> open file. An open file keeps its position across a rename.
 known_dirs = set()
 ops = (output / "operations.jsonl").open("w")
 events = (output / "inotify.log").open("w")
@@ -62,7 +67,7 @@ def discover(path):
     elif path.is_file() and not path.is_symlink() and name not in files:
         parents(Path(name))
         handle = path.open("rb")
-        # A moved-to file is the same observed inode, not a fabricated rotation.
+        # A new name for an inode we already have open is a rename.
         inode = os.fstat(handle.fileno()).st_ino
         old = next((n for n, f in files.items()
                     if os.fstat(f.fileno()).st_ino == inode), None)
@@ -77,7 +82,7 @@ def discover(path):
 
 
 try:
-    # Real preexisting backlog, read after native watches are established.
+    # Record the files that already exist, now that the watches are in place.
     for directory in selected:
         discover(directory)
     (output / "ready").touch()

@@ -1,4 +1,5 @@
-# Synthetic capture environment; no production resources or credentials.
+# The cluster and pods that run.sh records: three PostgreSQL instances, a client
+# pod that connects to them, and two pods that only print unrelated lines.
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
