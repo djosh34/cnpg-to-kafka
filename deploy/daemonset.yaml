@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: cnpg-to-kafka
+  namespace: observability
+spec:
+  selector:
+    matchLabels:
+      app: cnpg-to-kafka
+  template:
+    metadata:
+      labels:
+        app: cnpg-to-kafka
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/os: linux
+        kubernetes.io/arch: amd64
+      # Kafka outage/idempotent in-flight produce may outlast this grace;
+      # Kubernetes can then SIGKILL. Retain state for durable queue recovery.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: collector
+          # Replace with an immutable, reviewed release tag or digest.
+          image: ghcr.io/djosh34/cnpg-to-kafka:main
+          imagePullPolicy: Always
+          args:
+            - --config=/etc/cnpg-to-kafka/config.yaml
+          securityContext:
+            # Host pod logs and DirectoryOrCreate state are normally root-owned.
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: pod-logs
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: state
+              mountPath: /var/lib/cnpg-to-kafka
+            - name: config
+              mountPath: /etc/cnpg-to-kafka/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            - name: tls
+              mountPath: /etc/cnpg-to-kafka/tls
+              readOnly: true
+      volumes:
+        - name: pod-logs
+          hostPath:
+            path: /var/log/pods
+            type: Directory
+        - name: state
+          hostPath:
+            path: /var/lib/cnpg-to-kafka
+            type: DirectoryOrCreate
+        - name: config
+          configMap:
+            name: cnpg-to-kafka-config
+        - name: tls
+          secret:
+            secretName: cnpg-to-kafka-tls
+            defaultMode: 0400

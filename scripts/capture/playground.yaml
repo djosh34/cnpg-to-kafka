@@ -1,0 +1,60 @@
+# Synthetic capture environment; no production resources or credentials.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: cnpg
+  namespace: capture
+spec:
+  instances: 3
+  imageName: ghcr.io/cloudnative-pg/postgresql:18-system-trixie
+  imagePullPolicy: Always
+  affinity:
+    enablePodAntiAffinity: false
+  storage:
+    size: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  postgresql:
+    parameters:
+      log_connections: 'all'
+      log_disconnections: 'on'
+  bootstrap:
+    initdb:
+      database: app
+      owner: app
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: client
+  namespace: capture
+spec:
+  containers:
+    - name: client
+      image: ghcr.io/cloudnative-pg/postgresql:18-system-trixie
+      imagePullPolicy: Always
+      command: [sleep, infinity]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: noise
+  namespace: capture
+spec:
+  containers:
+    - name: noise
+      image: busybox:1.37
+      command: [sh, -c, 'while true; do echo ordinary unrelated same-namespace output; sleep 1; done']
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: noise
+  namespace: other
+spec:
+  containers:
+    - name: noise
+      image: busybox:1.37
+      command: [sh, -c, 'while true; do echo ordinary unrelated other-namespace output; sleep 1; done']

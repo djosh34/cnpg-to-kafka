@@ -1,0 +1,64 @@
+name: Replay acceptance
+
+on:
+  pull_request:
+  push:
+    branches: [main, 'implement/**']
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GOMAXPROCS: '2'
+      COMPOSE_PROJECT_NAME: cnpg-e2e
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Prepare disclosed native dependency feature cuts
+        run: ./scripts/prepare-go.sh
+      - name: Check formatting and build native amd64 Collector
+        run: |
+          test "$(go env GOOS)/$(go env GOARCH)" = linux/amd64
+          test -z "$(git ls-files -z '*.go' | xargs -0 gofmt -l)"
+          go build -p 1 -mod=vendor ./...
+          mkdir -p bin
+          CGO_ENABLED=0 go build -p 1 -mod=vendor -o bin/cnpg-to-kafka ./cmd/collector
+      - name: Fast Go tests
+        run: go test -p 1 -mod=vendor -count=1 -timeout=8m ./...
+      - name: Start one disposable TLS Redpanda and its mTLS registry
+        run: bash scripts/e2e-setup.sh "$COMPOSE_PROJECT_NAME"
+      - name: Real filesystem replay through actual Collector and Kafka
+        env:
+          CNPG_E2E: '1'
+          CNPG_COLLECTOR_BIN: ${{ github.workspace }}/bin/cnpg-to-kafka
+          CNPG_RECORDING: ${{ github.workspace }}/testdata/capture/operations.jsonl
+          CNPG_DECODED_EVENTS: ${{ github.workspace }}/decoded-events.jsonl
+        run: |
+          go test -p 1 -mod=vendor -list '^TestRealReplay$' ./integration | grep -Fx TestRealReplay
+          go test -p 1 -mod=vendor -v -count=1 -run '^TestRealReplay$' -timeout=10m ./integration
+      - name: Show available consumed and Avro-decoded Kafka events
+        if: always()
+        run: |
+          if test -f decoded-events.jsonl; then
+            cat decoded-events.jsonl
+          else
+            echo 'No decoded events file available; see preceding failure.'
+          fi
+      - name: Upload available decoded Kafka events, including on failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: decoded-events
+          path: decoded-events.jsonl
+          if-no-files-found: warn
+      - name: Stop disposable services
+        if: always()
+        run: docker compose -p "$COMPOSE_PROJECT_NAME" -f integration/compose.yaml down -v

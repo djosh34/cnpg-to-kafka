@@ -1,0 +1,25 @@
+name: Deliberate CNPG capture
+on:
+  workflow_dispatch:
+  push:
+    tags: ['cnpg-capture-*']
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native observation tools
+        run: sudo apt-get update && sudo apt-get install -y inotify-tools jq
+      - name: Provision disposable k3s and capture five minutes
+        run: bash scripts/capture/run.sh
+      - name: Save recording and diagnostics for manual inspection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cnpg-capture
+          path: testdata/capture/
+          if-no-files-found: warn
+          retention-days: 14

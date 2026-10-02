@@ -1,0 +1,11 @@
+{
+  "type": "record",
+  "name": "ConnectionEvent",
+  "namespace": "cnpg.example",
+  "fields": [
+    {"name": "role", "type": "string"},
+    {"name": "hostname", "type": "string"},
+    {"name": "eventtype", "type": {"type": "enum", "name": "EventType", "symbols": ["LOGIN", "LOGOUT", "LOGIN_FAILED"]}},
+    {"name": "context", "type": {"type": "record", "name": "EventContext", "fields": [{"name": "database", "type": "string"}]}}
+  ]
+}
