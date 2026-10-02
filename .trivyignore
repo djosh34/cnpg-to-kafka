@@ -1,0 +1,5 @@
+# Each advisory follows a comment line with the Go package it is about. The
+# image workflow fails if the Collector imports one of these packages.
+
+# golang.org/x/crypto/openpgp
+GO-2026-5932
