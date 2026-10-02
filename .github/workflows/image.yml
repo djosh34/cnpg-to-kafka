@@ -117,3 +117,7 @@ jobs:
           fi
           docker tag cnpg-to-kafka:scan "$image:$tag"
           docker push "$image:$tag"
+          if [[ "$REF" == refs/tags/* && "$REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            docker tag cnpg-to-kafka:scan "$image:latest"
+            docker push "$image:latest"
+          fi
