@@ -30,8 +30,13 @@ release tags are never forced, moved or deleted. Write credentials are confined
 to the gated `release` environment publisher, not PR or repository-wide jobs.
 
 Publishers share one non-canceling concurrency group. They check remote main
-inside that lock and immediately before mutable main/latest publication; stale
-runs skip rather than displacing a newer main. Retry only a failed publisher
+once inside that lock, before any writes; queued stale runs skip. Once fresh
+publication starts, it completes even if main advances, rather than abandoning
+an immutable tag without its image/release/latest. The global lock prevents a
+newer publisher finishing before the active one; this is bounded serialization,
+not a transaction or an instantaneous guarantee that aliases follow Git HEAD.
+Normal tool/network failures still fail the job, not a successful partial skip.
+Retry only a failed publisher
 while its SHA is still current. A matching existing Git tag resumes, but an
 existing version image is never overwritten: its native registry config digest
 must match the exact saved scan artifact or publication fails before any writes.

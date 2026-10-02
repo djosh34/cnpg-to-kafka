@@ -42,15 +42,13 @@ if [[ "$release" == true ]]; then
   fi
 fi
 
-current_main() {
-  local head
-  head=$(git ls-remote origin refs/heads/main | awk '{print $1}') || exit 1
-  if [[ "$head" != "$GITHUB_SHA" ]]; then
-    echo 'Stale main run: skip publication without moving aliases.' >&2
-    return 1
-  fi
-}
-current_main || exit 0
+# One freshness check under the non-canceling global lock, before any writes.
+# Once started, finish: a newer publisher cannot complete before this one.
+head=$(git ls-remote origin refs/heads/main | awk '{print $1}')
+if [[ "$head" != "$GITHUB_SHA" ]]; then
+  echo 'Stale main run: skip publication without moving aliases.' >&2
+  exit 0
+fi
 
 if [[ "$release" == true && -z "$existing_tag" ]]; then
   git tag "$version" "$GITHUB_SHA"
@@ -60,7 +58,6 @@ fi
 docker tag cnpg-to-kafka:scan "$image:sha-$GITHUB_SHA"
 docker push "$image:sha-$GITHUB_SHA"
 docker tag cnpg-to-kafka:scan "$image:main"
-current_main || exit 0
 docker push "$image:main"
 
 if [[ "$release" == true ]]; then
@@ -71,7 +68,6 @@ if [[ "$release" == true ]]; then
   existing_release=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq \
     ".[] | select(.tag_name == \"$version\") | .id")
   if [[ -z "$existing_release" ]]; then
-    current_main || exit 0
     gh release create "$version" --repo "$GITHUB_REPOSITORY" --verify-tag \
       --target "$GITHUB_SHA" --title "$version" --latest \
       --notes "Scanned image from $GITHUB_SHA: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
@@ -79,6 +75,5 @@ if [[ "$release" == true ]]; then
   source=cnpg-to-kafka:scan
   if [[ -n "$existing_image" ]]; then source="$image@$existing_image"; fi
   docker tag "$source" "$image:latest"
-  current_main || exit 0
   docker push "$image:latest"
 fi

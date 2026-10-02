@@ -168,15 +168,18 @@ passed 'rerun-all changed image bytes conflicts before any write'
 reset_case
 export STALE_AFTER=1
 run_case publish-release.sh pass
-contains ":sha-$GITHUB_SHA"
-absent 'docker push ghcr.io/djosh34/cnpg-to-kafka:main'
-absent ':latest'
-passed 'stale after initial check cannot push main/latest'
+contains "git tag v0.1.0 $GITHUB_SHA"
+contains 'docker push ghcr.io/djosh34/cnpg-to-kafka:main'
+contains 'docker push ghcr.io/djosh34/cnpg-to-kafka:v0.1.0'
+contains 'gh release create v0.1.0'
+contains 'docker push ghcr.io/djosh34/cnpg-to-kafka:latest'
+[[ "$(< "$MAIN_COUNT")" == 1 ]]
+passed 'active publication completes if main advances after start; no stranded release'
 reset_case
-export STALE_AFTER=3
+export STALE_AFTER=0
 run_case publish-release.sh pass
-absent 'docker push ghcr.io/djosh34/cnpg-to-kafka:latest'
-passed 'stale immediately before latest cannot move it'
+no_writes
+passed 'later queued stale publisher still skips before any write'
 for case_name in registry-error diff-error main-error; do
   reset_case
   case "$case_name" in
