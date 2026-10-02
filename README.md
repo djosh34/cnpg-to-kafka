@@ -1,98 +1,107 @@
-# CNPG to Kafka
+# cnpg-to-kafka
 
-A minimal Linux/amd64 OpenTelemetry Collector distribution:
+cnpg-to-kafka publishes one Kafka message for each login, logout and failed
+login on a [CloudNativePG](https://cloudnative-pg.io) PostgreSQL cluster. It is
+for teams that run CloudNativePG on Kubernetes and want connection events in
+Kafka, for example for an audit trail.
 
-```text
-pod log files → native container/JSON parsing and filters
-              → Avro mapping → native Kafka exporter (raw bytes)
+It is a build of the [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/)
+with four components. The file log receiver reads the pod logs on each node and
+picks out the connection records. A processor from this repository encodes each
+one as Avro with a schema from your Schema Registry. The Kafka exporter
+publishes it, and the file storage extension keeps read positions and unsent
+events on disk.
+
+## An event
+
+The value of each Kafka message is one Avro record in the Confluent wire format.
+Decoded, it looks like this:
+
+```json
+{"role":"app","hostname":"10.42.0.6","eventtype":"LOGIN","context":{"database":"app"}}
 ```
 
-It emits successful session authorization (`LOGIN`), logged PostgreSQL
-disconnection (`LOGOUT`), and explicit authentication/access rejection
-(`LOGIN_FAILED`). Receipt/authentication-progress messages and unrelated FATAL
-errors are not connection events. Primary and replica records use the same
-rules.
+| Field | Content |
+|---|---|
+| `role` | The PostgreSQL role that connected. |
+| `hostname` | The client's host name or IP address as PostgreSQL logged it, without the port. |
+| `eventtype` | `LOGIN`, `LOGOUT` or `LOGIN_FAILED`. |
+| `context.database` | The database the client asked for. |
 
-Select one namespace and optionally a pod-name regex in the native
-[`config.yaml`](config.yaml). No regex means no extra pod-name restriction.
-Role exclusions are exact and case-sensitive, and suppress only successful
-logins and logouts; recognizable failed logins always pass that role filter.
-`hostname` means the connecting client's recorded hostname/IP, not the database
-pod or node. Missing identity on a recognizable failure is an empty string;
-missing database is an empty string. Extra fields are ignored, invalid JSON and
-unrecognizable events are skipped, and successful login/logout records missing
-necessary output fields may be skipped with DEBUG diagnostics.
+A `LOGIN_FAILED` event has an empty string for every field that PostgreSQL did
+not log. The schema is [`schema/connection-event.avsc`](schema/connection-event.avsc).
 
-Each Kafka value is one event: `0x00`, the four-byte big-endian Schema Registry
-ID, then the Avro binary datum. There is no JSON or OTLP envelope. The example
-schema is intentionally small; it does not claim compatibility with a private
-schema. The schema fetched at startup is authoritative. The private-schema fork
-boundary is [`Event`/`EventContext`](processor/avroprocessor/event.go) and the
-[example schema](schema/connection-event.avsc); adapt the mapper with them.
+Logins and logouts of the roles `postgres` and `streaming_replica` are not
+published. CloudNativePG's instance manager connects as `postgres` about once a
+second, and the replicas connect as `streaming_replica`. Their failed logins are
+published. You can change the list in
+[`config.yaml`](config.yaml).
 
-## Build and run
+## Prerequisites
 
-Use the Go version declared in `go.mod` and GNU `patch`. The shared preparation
-script generates vendor sources and applies the two [disclosed native dependency
-feature cuts](patches/README.md). These are local modifications, not equivalent
-upstream releases; canonical module identities/versions remain scanner-visible.
+- PostgreSQL must log connections. In the CloudNativePG `Cluster`, set
+  `log_connections: 'on'` and `log_disconnections: 'on'` under
+  `spec.postgresql.parameters`.
+- The Kafka topic must exist. cnpg-to-kafka does not create it.
+- The Schema Registry subject must exist and hold a schema with the fields
+  above. cnpg-to-kafka reads the schema and never registers one.
+- A certificate authority file for Kafka and for the registry, plus a client
+  certificate and key if they ask for one. The example configuration uses
+  mutual TLS. The Collector's other
+  [TLS](https://github.com/open-telemetry/opentelemetry-collector/blob/main/config/configtls/README.md)
+  and [Kafka authentication](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/exporter/kafkaexporter/README.md)
+  settings work too.
+
+## Configure
+
+Copy [`config.yaml`](config.yaml) and change the namespace of your cluster, the
+Kafka brokers and topic, the registry URLs and subject, and the certificate
+paths. `${env:NAME}` in a value reads the environment variable `NAME`.
+[docs/operations.md](docs/operations.md) explains the settings.
+
+## Run
+
+The image is `ghcr.io/djosh34/cnpg-to-kafka`. Use a version tag such as
+`v0.2.0`. It holds one static binary for linux/amd64 and nothing else, so it has
+no CA certificates and no shell. It reads `/etc/cnpg-to-kafka/config.yaml`
+unless you pass `--config`.
+
+[`deploy/daemonset.yaml`](deploy/daemonset.yaml) runs it on every node.
+[docs/operations.md](docs/operations.md) has the commands.
+
+To build and run it yourself you need the Go version named in `go.mod`:
 
 ```sh
-./scripts/prepare-go.sh
-go test -mod=vendor ./...
-mkdir -p bin
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor -o bin/cnpg-to-kafka ./cmd/collector
-./bin/cnpg-to-kafka validate --config=config.yaml
-./bin/cnpg-to-kafka --config=config.yaml
+go build -o bin/cnpg-to-kafka ./cmd/collector
+bin/cnpg-to-kafka validate --config config.yaml
+bin/cnpg-to-kafka --config config.yaml
 ```
 
-Before running, edit `config.yaml`, supply its referenced certificate files,
-and ensure the destination topic and external registry subject already exist.
-Registry lookup happens once per startup; **the runtime never registers schemas
-or creates topics**. No production deployment or provisioning is performed by
-these commands.
+## Inspect
 
-See [operations and the plain DaemonSet example](docs/operations.md) for mounts,
-configuration, shutdown and durability boundaries, and
-[filesystem replay](docs/replay.md) for replaying the deliberate real capture.
-Routine PR acceptance must replay the checked-in real recording, without
-installing k3s or CNPG. Test setup alone provisions disposable services, topic
-and sample schema. The acceptance workflow must print consumed, Avro-decoded
-Collector events and upload `decoded-events.jsonl`, including available output
-on failed end-to-end runs. The recording's deliberate capture run is linked in
-[replay documentation](docs/replay.md). Passing replay-based Actions and final-image
-CVE acceptance are not yet established; workflow descriptions are not completion
-claims. See [local real-broker acceptance](docs/operations.md#local-real-broker-acceptance)
-for the Compose/replay test commands.
-
-## Inspect Kafka events
-
-Use the same runtime YAML and mounted TLS files; no separate consumer config is
-needed:
+`cmd/inspect` prints the events in the topic as JSON lines, oldest first. It
+takes the brokers, the topic, the registry and the certificates from the same
+config file.
 
 ```sh
-go run -mod=vendor ./cmd/inspect --config config.yaml --limit 10 --timeout 30s
+go run ./cmd/inspect --config config.yaml --limit 10
 ```
 
-The helper consumes from the earliest available records without a consumer group
-or offset commits, resolves each record's schema ID, and prints decoded JSONL to
-stdout (errors go to stderr). `--limit 0` follows until timeout or signal; a
-positive limit not reached by the deadline exits with an error. Unlike the
-running Collector's startup-only lookup, the inspector needs registry access to
-resolve historical wire IDs (cached by the library). This is read-only
-inspection: it does not create a topic or register a schema.
+Without `--limit` it prints events until `--timeout` passes, 30 seconds by
+default. It joins no consumer group and commits no offsets.
 
-## Image boundary
+## Test
 
-The runtime image is a static amd64 binary in scratch, without a built-in CA
-bundle, shell, runtime configuration or credentials. Build/test PR images do not
-receive publishing credentials. Only pushes to main publish to GHCR (as
-`sha-<commit>` and `main`), after Trivy successfully scans the actual final
-artifact with **zero reported known CVEs at any severity, including unfixed
-findings**. Scanner failure blocks publication. This is a publish-time check,
-not a promise about future or unknown vulnerabilities.
+```sh
+go test -v ./...
+```
 
-A release is a `vX.Y.Z` (or `vX.Y.Z-<prerelease>`) git tag pushed by the
-repository owner. It never builds: it re-tags the existing `sha-<commit>` image
-as the version, moves `latest` for stable versions only, and creates a GitHub
-Release. Tagging a commit that has no image from main fails.
+The tests need no Docker and no setup. One of them replays a recording of real
+CloudNativePG pod logs through the Collector into an in-process Kafka and prints
+every event that comes out. [docs/design.md](docs/design.md) describes it.
+
+## More
+
+- [docs/operations.md](docs/operations.md): deployment, tuning the event rules,
+  what survives an outage, shutdown.
+- [docs/design.md](docs/design.md): why it is built this way.
