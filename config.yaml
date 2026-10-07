@@ -1,5 +1,6 @@
-# Example configuration. Change the namespace, the excluded roles, the Kafka and
-# registry addresses, the topic, the subject and the certificate paths to yours.
+# Example configuration. Change the namespace, the cnpg processor settings, the
+# Kafka and registry addresses, the topic, the subject and the certificate paths
+# to yours.
 receivers:
   file_log/cnpg:
     # Pod logs are at /var/log/pods/<namespace>_<pod>_<uid>/<container>/<n>.log.
@@ -11,85 +12,35 @@ receivers:
     storage: file_storage
     max_log_size: 1MiB
     # The container operator of Collector v0.162 has a data race when it reads
-    # several files at once, so read one file at a time. With max_batches 0 each
-    # poll still reads every matched file.
+    # several files at once, so read one file at a time. Each poll still reads
+    # every matched file.
     max_concurrent_files: 1
-    max_batches: 0
     poll_interval: 200ms
     retry_on_failure:
       enabled: true
       initial_interval: 1s
       max_interval: 30s
       max_elapsed_time: 0s
+    # Sets the namespace and pod name that the cnpg processor keys its session
+    # table by, and puts the log line in the body.
     operators:
       - type: container
         id: container
         on_error: drop
-      # Keeps only pods whose name matches the regex. ".*" keeps all of them.
-      - type: filter
-        id: select-pods
-        expr: 'not (resource["k8s.pod.name"] matches ".*")'
-        on_error: drop
-      # Lines that are not JSON are normal in pod logs. drop_quiet drops them
-      # without logging an error for each.
-      - type: json_parser
-        id: cnpg-json
-        parse_to: body
-        on_error: drop_quiet
-      - type: filter
-        id: postgres-records
-        expr: 'body.logger != "postgres" or body.record == nil'
-        on_error: drop
-      # LOGIN_FAILED is a FATAL record with SQLSTATE 28P01 or 28000, or with
-      # 42501 and "permission denied for database". LOGIN is "connection
-      # authorized:" or "replication connection authorized:". LOGOUT is
-      # "disconnection:". Every other record gets "" and the next filter drops it.
-      - type: add
-        id: classify
-        field: attributes.eventtype
-        value: >-
-          EXPR(body.record.error_severity == "FATAL" and
-          (body.record.sql_state_code in ["28P01", "28000"] or
-          (body.record.sql_state_code == "42501" and body.record.message != nil and
-          body.record.message startsWith "permission denied for database "))
-          ? "LOGIN_FAILED" : body.record.message != nil and
-          (body.record.message startsWith "connection authorized:" or
-          body.record.message startsWith "replication connection authorized:")
-          ? "LOGIN" : body.record.message != nil and
-          body.record.message startsWith "disconnection:" ? "LOGOUT" : "")
-        on_error: drop
-      - type: filter
-        id: connection-events
-        expr: 'attributes.eventtype == ""'
-      # Drops logins and logouts of these roles. The match is exact and
-      # case-sensitive. Their failed logins are still published.
-      - type: filter
-        id: excluded-roles
-        expr: 'attributes.eventtype != "LOGIN_FAILED" and body.record.user_name in ["postgres", "streaming_replica"]'
-        on_error: drop
-      - type: add
-        id: role
-        field: attributes.role
-        value: 'EXPR(body.record.user_name ?? "")'
-      - type: add
-        id: database
-        field: attributes.database
-        value: 'EXPR(body.record.database_name ?? "")'
-      - type: add
-        id: client
-        field: attributes.hostname
-        value: 'EXPR(body.record.connection_from ?? "")'
-      # connection_from is host:port. Strip the port and the brackets of an
-      # IPv6 address. A value without a port, such as [local], stays as it is.
-      - type: regex_parser
-        id: client-with-port
-        if: 'attributes.hostname matches "^.+:[0-9]+$"'
-        parse_from: attributes.hostname
-        parse_to: attributes
-        regex: '^\[?(?P<hostname>[^\]]+)\]?:[0-9]+$'
-        on_error: drop
 
 processors:
+  cnpg:
+    source_hostname: db1.example.com # Its IP address is looked up at startup.
+    additional_fields:
+      application_name: payments
+    # The account type is ha for these roles, exact match, and npa otherwise.
+    high_privilege_roles: [postgres, app_admin]
+    # A login is not published when role, method and identity all match an
+    # entry. A logout is not published when its role is in any entry. Failed
+    # logins are always published.
+    trusted_connections:
+      - {role: postgres, method: peer, identity: postgres}
+      - {role: streaming_replica, method: cert, identity: "CN=streaming_replica"}
   avro:
     registry:
       urls: [https://registry-1.example.com:8081, https://registry-2.example.com:8081]
@@ -142,7 +93,7 @@ service:
   pipelines:
     logs:
       receivers: [file_log/cnpg]
-      processors: [avro]
+      processors: [cnpg, avro]
       exporters: [kafka/cnpg]
   telemetry:
     logs:

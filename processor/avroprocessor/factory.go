@@ -14,6 +14,8 @@ import (
 	"go.opentelemetry.io/collector/processor"
 	"go.opentelemetry.io/collector/processor/processorhelper"
 	"go.uber.org/zap"
+
+	"github.com/djosh34/cnpg-to-kafka/internal/event"
 )
 
 // NewFactory returns the factory of the avro processor.
@@ -50,38 +52,33 @@ func createLogs(ctx context.Context, set processor.Settings, config component.Co
 	)
 }
 
-// encode replaces the record body with the framed Avro event built from the
-// record's attributes. It reports false for a record that is not a complete
-// event or that the schema cannot encode. The attributes stay in place, so a
-// record that the receiver sends again after a failed export encodes the same.
+// encode replaces the record body with the framed Avro event from the
+// record's attributes. It reports false for a record that the schema cannot
+// encode. The attributes stay in place, so a record that the receiver sends
+// again after a failed export encodes the same.
 func encode(record plog.LogRecord, schema registry.SchemaInfo, logger *zap.Logger) bool {
-	attribute := func(key string) string {
-		value, ok := record.Attributes().Get(key)
-		if !ok {
-			return ""
-		}
-		return value.AsString()
-	}
-	event := Event{
-		Role:      attribute("role"),
-		Hostname:  attribute("hostname"),
-		EventType: attribute("eventtype"),
-		Context:   EventContext{Database: attribute("database")},
-	}
-	// A failed login can lack a role and a client host. A login or logout cannot.
-	if event.EventType == "" || (event.EventType != "LOGIN_FAILED" && (event.Role == "" || event.Hostname == "")) {
-		logger.Debug("skip record without event type, role or hostname")
+	e, err := event.FromAttributes(record.Attributes())
+	if err != nil {
+		logger.Warn("drop record without a complete connection event", zap.Error(err))
 		return false
 	}
-	payload, err := avro.Marshal(schema.Schema, event)
+	frame, err := Encode(schema, e)
 	if err != nil {
 		logger.Warn("cannot encode connection event", zap.Error(err))
 		return false
 	}
-	// Confluent wire format: a zero byte, the schema ID as four big-endian
-	// bytes, then the Avro binary.
+	record.Body().SetEmptyBytes().FromRaw(frame)
+	return true
+}
+
+// Encode returns the event in the Confluent wire format: a zero byte, the
+// schema ID as four big-endian bytes, then the Avro binary.
+func Encode(schema registry.SchemaInfo, e event.Event) ([]byte, error) {
+	payload, err := avro.Marshal(schema.Schema, e)
+	if err != nil {
+		return nil, err
+	}
 	frame := make([]byte, 5, 5+len(payload))
 	binary.BigEndian.PutUint32(frame[1:], uint32(schema.ID))
-	record.Body().SetEmptyBytes().FromRaw(append(frame, payload...))
-	return true
+	return append(frame, payload...), nil
 }

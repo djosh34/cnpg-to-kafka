@@ -25,13 +25,13 @@ type Operation struct {
 // Run applies the recorded operations in order inside the existing directory
 // rootPath. It waits between operations as the recording did, divided by speed.
 // A speed of 0 does not wait.
-func Run(ctx context.Context, rootPath string, recording io.Reader, speed float64) error {
+func Run(ctx context.Context, rootPath string, recording io.Reader, speed float64) (err error) {
 	// os.Root refuses paths that leave the directory.
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer func() { err = errors.Join(err, root.Close()) }()
 	decoder := json.NewDecoder(recording)
 	start := time.Now()
 	for n := 1; ; n++ {

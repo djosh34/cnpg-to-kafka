@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -22,15 +23,19 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	file, err := os.Open(*recording)
-	if err == nil {
-		defer file.Close()
-		err = replay.Run(ctx, *root, file, *speed)
-	}
-	if err != nil {
+	if err := run(*root, *recording, *speed); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func run(root, recording string, speed float64) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	file, err := os.Open(recording)
+	if err != nil {
+		return err
+	}
+	err = replay.Run(ctx, root, file, speed)
+	return errors.Join(err, file.Close())
 }

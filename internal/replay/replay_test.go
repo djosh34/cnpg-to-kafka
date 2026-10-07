@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRotation(t *testing.T) {
@@ -19,21 +22,16 @@ func TestRotation(t *testing.T) {
 {"at_ms":6,"op":"remove","path":"ns_pod_uid/postgres/old.log.gz"}
 `
 	root := t.TempDir()
-	if err := Run(t.Context(), root, strings.NewReader(recording), 1000); err != nil {
-		t.Fatal(err)
+	require.NoError(t, Run(t.Context(), root, strings.NewReader(recording), 1000))
+
+	dir := filepath.Join(root, "ns_pod_uid/postgres")
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	got := map[string]string{}
+	for _, entry := range entries {
+		content, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		require.NoError(t, err)
+		got[entry.Name()] = string(content)
 	}
-	want := map[string]string{"0.log.20261001-120000": "one\ntwo\n", "0.log": "three\n"}
-	entries, err := os.ReadDir(filepath.Join(root, "ns_pod_uid/postgres"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != len(want) {
-		t.Errorf("%d files, want %d", len(entries), len(want))
-	}
-	for name, content := range want {
-		got, err := os.ReadFile(filepath.Join(root, "ns_pod_uid/postgres", name))
-		if err != nil || string(got) != content {
-			t.Errorf("%s: got %q, error %v, want %q", name, got, err, content)
-		}
-	}
+	assert.Equal(t, map[string]string{"0.log.20261001-120000": "one\ntwo\n", "0.log": "three\n"}, got)
 }

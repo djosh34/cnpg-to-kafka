@@ -3,9 +3,20 @@
   "name": "ConnectionEvent",
   "namespace": "cnpg.example",
   "fields": [
-    {"name": "role", "type": "string"},
-    {"name": "hostname", "type": "string"},
+    {"name": "timestamp", "type": {"type": "long", "logicalType": "timestamp-millis"}},
     {"name": "eventtype", "type": {"type": "enum", "name": "EventType", "symbols": ["LOGIN", "LOGOUT", "LOGIN_FAILED"]}},
-    {"name": "context", "type": {"type": "record", "name": "EventContext", "fields": [{"name": "database", "type": "string"}]}}
+    {"name": "account_type", "type": {"type": "enum", "name": "AccountType", "symbols": ["ha", "npa"]}},
+    {"name": "application_name", "type": "string"},
+    {"name": "hostdata", "type": {"type": "record", "name": "HostData", "fields": [
+      {"name": "source_hostname", "type": "string"},
+      {"name": "source_ip", "type": "string"}
+    ]}},
+    {"name": "connectiondata", "type": {"type": "record", "name": "ConnectionData", "fields": [
+      {"name": "role", "type": "string"},
+      {"name": "database", "type": "string"},
+      {"name": "cn", "type": ["null", "string"], "default": null},
+      {"name": "auth_method", "type": ["null", "string"], "default": null},
+      {"name": "client_address", "type": "string"}
+    ]}}
   ]
 }
