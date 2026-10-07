@@ -1,0 +1,3 @@
+2026-10-01T22:27:34.166593284Z stderr F {"level":"info","ts":"2026-10-01T22:27:34.166292269Z","msg":"Installing the manager executable","destination":"/controller/manager","version":"1.30.1","build":{"Version":"1.30.1","Commit":"2a35abb46","Date":"2026-09-23"}}
+2026-10-01T22:27:34.57222738Z stderr F {"level":"info","ts":"2026-10-01T22:27:34.572073446Z","msg":"Setting 0750 permissions"}
+2026-10-01T22:27:34.572248984Z stderr F {"level":"info","ts":"2026-10-01T22:27:34.572132042Z","msg":"Bootstrap completed"}
