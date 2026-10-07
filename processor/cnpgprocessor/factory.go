@@ -63,7 +63,7 @@ func (p *cnpgProcessor) start(ctx context.Context, _ component.Host) error {
 }
 
 // processLogs keeps the records that make an event and sets the event in
-// their attributes. It drops every other record.
+// their attributes. It drops every other record, and a batch without events.
 func (p *cnpgProcessor) processLogs(_ context.Context, logs plog.Logs) (plog.Logs, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -74,6 +74,9 @@ func (p *cnpgProcessor) processLogs(_ context.Context, logs plog.Logs) (plog.Log
 				return !p.process(pod, record)
 			})
 		}
+	}
+	if logs.LogRecordCount() == 0 {
+		return logs, processorhelper.ErrSkipProcessingData
 	}
 	return logs, nil
 }

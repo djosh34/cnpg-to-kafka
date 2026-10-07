@@ -1,6 +1,7 @@
 package event
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -137,11 +138,37 @@ func TestMake(t *testing.T) {
 			want:  []Event{testEvent(LoginFailed, at(22, 29, 1, 0), new("included"), scram)},
 		},
 		{name: "too many connections", lines: fixture.TooManyConnections},
+		{
+			// The ready line is the 999th later record of the pod, so it still
+			// finds the entry.
+			name:  "ready line 999 records after authentication",
+			lines: slices.Concat(fixture.PeerLogin[1:2], slices.Repeat(fixture.NoEvent[:1], countdown-2), fixture.PeerLogin[3:4]),
+		},
+		{
+			// The ready line is the 1000th later record and counts the entry
+			// down to zero, so the trusted login has no join data and is
+			// published.
+			name:  "ready line 1000 records after authentication",
+			lines: slices.Concat(fixture.PeerLogin[1:2], slices.Repeat(fixture.NoEvent[:1], countdown-1), fixture.PeerLogin[3:4]),
+			want: []Event{{
+				Timestamp:       at(22, 28, 26, 455),
+				EventType:       Login,
+				AccountType:     AccountHA,
+				ApplicationName: "payments",
+				HostData:        testRules.Host,
+				ConnectionData:  ConnectionData{Role: "postgres", Database: "postgres", ClientAddress: "[local]"},
+			}},
+		},
 		{name: "other records", lines: fixture.NoEvent},
 		{
 			name:   "log_time that does not parse",
 			lines:  []string{strings.Replace(fixture.IncludedLogin[3], " UTC", " CEST", 1)},
 			errors: 1,
+		},
+		{
+			// A trusted login is no event, so its log_time does not matter.
+			name:  "trusted login with a log_time that does not parse",
+			lines: []string{fixture.PeerLogin[1], strings.Replace(fixture.PeerLogin[3], " UTC", " CEST", 1)},
 		},
 	}
 	for _, c := range cases {
@@ -240,6 +267,9 @@ func TestHBAMethod(t *testing.T) {
 		{"role named like a method", matched("host all cert all scram-sha-256"), new("scram-sha-256")},
 		{"database named like a method", matched("local trust peer reject"), new("reject")},
 		{"quoted name with a space", matched(`host "my db" all all md5`), new("md5")},
+		{"list with spaces", matched("host all app, reader all scram-sha-256"), new("scram-sha-256")},
+		{"list with spaces and a role named like a method", matched("host all app, reader, cert all scram-sha-256"), new("scram-sha-256")},
+		{"quoted method", matched(`host all all all "scram-sha-256"`), new("scram-sha-256")},
 		{"trailing comment", matched("local all all peer # instance manager"), new("peer")},
 		{"role does not exist", "Role \"ghost\" does not exist.\n" + matched("host all all all scram-sha-256"), new("scram-sha-256")},
 		{"method field is not a method", matched("host all all all password1"), nil},

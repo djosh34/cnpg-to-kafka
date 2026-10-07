@@ -99,6 +99,7 @@ func startAvro(t *testing.T, next consumer.Logs) (processor.Logs, registry.Schem
 // as failures says.
 type sink struct {
 	failures int
+	batches  int
 	records  []plog.LogRecord
 }
 
@@ -109,6 +110,7 @@ func (s *sink) consumer(t *testing.T) consumer.Logs {
 			s.failures--
 			return errors.New("export failed")
 		}
+		s.batches++
 		for _, resource := range logs.ResourceLogs().All() {
 			for _, scope := range resource.ScopeLogs().All() {
 				for _, record := range scope.LogRecords().All() {
@@ -137,11 +139,14 @@ func TestProcessor(t *testing.T) {
 		name    string
 		batches []plog.Logs
 		want    []event.Event
+		// sent is how many batches reach the next consumer.
+		sent int
 	}{
 		{
 			name:    "recorded login and logout",
 			batches: []plog.Logs{cnpg1(fixture.IncludedLogin...)},
 			want:    []event.Event{login, logout},
+			sent:    1,
 		},
 		{
 			name: "trusted connections",
@@ -155,6 +160,7 @@ func TestProcessor(t *testing.T) {
 				cnpg1(slices.Concat(fixture.WrongPassword, fixture.WrongCN, fixture.NoLogin, fixture.TooManyConnections)...),
 			},
 			want: []event.Event{failed, wrongCN, noLogin},
+			sent: 1,
 		},
 		{
 			name:    "other lines",
@@ -164,6 +170,7 @@ func TestProcessor(t *testing.T) {
 			name:    "session over two batches",
 			batches: []plog.Logs{cnpg1(fixture.IncludedLogin[:2]...), cnpg1(fixture.IncludedLogin[2:]...)},
 			want:    []event.Event{login, logout},
+			sent:    1,
 		},
 		{
 			// The ready line comes from another pod, so it has no join data.
@@ -177,6 +184,7 @@ func TestProcessor(t *testing.T) {
 				included(event.Login, at(28, 29, 982), nil, nil),
 				included(event.Login, at(28, 29, 982), nil, nil),
 			},
+			sent: 1,
 		},
 	}
 	for _, c := range cases {
@@ -196,6 +204,7 @@ func TestProcessor(t *testing.T) {
 				got = append(got, record.Attributes().AsRaw())
 			}
 			assert.Equal(t, want, got)
+			assert.Equal(t, c.sent, out.batches)
 		})
 	}
 }

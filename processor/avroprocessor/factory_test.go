@@ -63,6 +63,10 @@ func TestEncode(t *testing.T) {
 			var got event.Event
 			require.NoError(t, avro.Unmarshal(schema.Schema, frame[5:], &got))
 			assert.Equal(t, c.event, got)
+			// Unmarshal accepts a payload that ends early, so compare the bytes too.
+			payload, err := avro.Marshal(schema.Schema, c.event)
+			require.NoError(t, err)
+			assert.Equal(t, payload, frame[5:])
 		})
 	}
 }

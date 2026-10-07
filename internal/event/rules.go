@@ -33,17 +33,20 @@ type TrustedConnection struct {
 // returns an error when it makes one but its log_time does not parse.
 func (r Rules) Make(sessions *Sessions, pod string, record cnpg.Fields) (Event, bool, error) {
 	eventType := Classify(record)
+	sessions.CountDown(pod)
 	var auth Auth
 	joined := false
 	if eventType == Login || record.ErrorSeverity == "FATAL" {
 		auth, joined = sessions.Take(pod, record.SessionID)
 	}
-	sessions.CountDown(pod)
 	if a, ok := Authenticated(record.Message); ok {
 		sessions.Add(pod, record.SessionID, a)
 		return Event{}, false, nil
 	}
-	if eventType == "" {
+	switch {
+	case eventType == "",
+		eventType == Login && joined && r.Trusted(record.UserName, auth),
+		eventType == Logout && r.TrustedRole(record.UserName):
 		return Event{}, false, nil
 	}
 
@@ -63,16 +66,11 @@ func (r Rules) Make(sessions *Sessions, pod string, record cnpg.Fields) (Event, 
 			ClientAddress: ClientAddress(record.ConnectionFrom),
 		},
 	}
-	if joined {
-		event.ConnectionData.CN, event.ConnectionData.AuthMethod = &auth.Identity, &auth.Method
-	}
 	switch {
-	case eventType == Login && joined && r.Trusted(record.UserName, auth):
-		return Event{}, false, nil
-	case eventType == LoginFailed && !joined:
+	case joined:
+		event.ConnectionData.CN, event.ConnectionData.AuthMethod = &auth.Identity, &auth.Method
+	case eventType == LoginFailed:
 		event.ConnectionData.AuthMethod = HBAMethod(record.Detail)
-	case eventType == Logout && r.TrustedRole(record.UserName):
-		return Event{}, false, nil
 	}
 	return event, true, nil
 }
@@ -150,13 +148,19 @@ func HBAMethod(detail string) *string {
 	default:
 		return nil
 	}
-	if i >= len(fields) || !slices.Contains(methods, fields[i]) {
+	if i >= len(fields) {
 		return nil
 	}
-	return &fields[i]
+	method := strings.TrimSuffix(strings.TrimPrefix(fields[i], `"`), `"`)
+	if !slices.Contains(methods, method) {
+		return nil
+	}
+	return &method
 }
 
-// hbaFields splits a pg_hba rule at white space outside double quotes.
+// hbaFields splits a pg_hba rule at white space outside double quotes. As in
+// PostgreSQL, a list such as "app, reader" stays one field when white space
+// follows a comma.
 func hbaFields(rule string) []string {
 	var fields []string
 	start, quoted := -1, false
@@ -166,7 +170,7 @@ func hbaFields(rule string) []string {
 		}
 		separator := !quoted && unicode.IsSpace(r)
 		switch {
-		case separator && start >= 0:
+		case separator && start >= 0 && rule[i-1] != ',':
 			fields = append(fields, rule[start:i])
 			start = -1
 		case !separator && start < 0:
