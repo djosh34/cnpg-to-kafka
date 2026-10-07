@@ -133,8 +133,16 @@ only when it is a PostgreSQL 18 method name.
 CloudNativePG connects to its own instances all the time, and those logins
 would flood the topic. `trusted_connections` hides them, and only them:
 
-- A `LOGIN` is hidden when role, method and identity all exactly match an entry.
-  All three are required.
+- A `LOGIN` with any method but `cert` is hidden when role, method and the full
+  identity all exactly match an entry.
+- A `cert` `LOGIN` is hidden when role and method match an entry and the common
+  name in the logged subject equals its `common_name`. The common name is
+  decoded first: PostgreSQL logs the subject in RFC 2253 form, and the escapes
+  are undone, so `CN=Smith\, John` gives `Smith, John`, the name as it was typed
+  when the certificate was made. The rest of the subject, such as OU and O, is
+  not matched. A subject with no CN or with more than one CN matches no entry.
+- Every entry needs `role` and `method`. A `cert` entry needs `common_name` and no
+  `identity`, any other entry `identity` and no `common_name`.
 - A `LOGOUT` has no method or identity, so it is hidden when its role is in any
   entry.
 - A `LOGIN_FAILED` is always published. A failed login as `postgres` is the
@@ -142,8 +150,8 @@ would flood the topic. `trusted_connections` hides them, and only them:
 
 Matching on the method and identity is what makes hiding safe. Peer
 authentication as `postgres` only works from inside the database container, and
-a certificate with the subject `CN=streaming_replica` only works for whoever the
-trusted CA gave it to. `postgres` with a password from the network is published.
+a certificate with the common name `streaming_replica` only works for whoever
+the trusted CA gave it to. `postgres` with a password from the network is published.
 
 PostgreSQL's `application_name` is not used for this. The client sets it, so any
 client can call itself `cnpg-instance-manager`.

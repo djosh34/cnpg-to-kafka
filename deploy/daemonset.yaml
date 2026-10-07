@@ -24,7 +24,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: collector
-          image: ghcr.io/djosh34/cnpg-to-kafka:v0.3.0
+          image: ghcr.io/djosh34/cnpg-to-kafka:v0.4.0
           securityContext:
             # The pod logs and the state directory on the node belong to root.
             runAsUser: 0

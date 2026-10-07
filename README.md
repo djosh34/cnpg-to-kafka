@@ -80,16 +80,25 @@ over the unix socket every second or two, and the replicas as
 these.
 
 - A `LOGIN` is hidden when its role, method and identity all exactly match one
-  entry.
+  entry. A `cert` entry has `common_name` in place of `identity`, and matches
+  the common name (CN) of the certificate. The rest of the subject, such as OU
+  and O, is not matched.
 - A `LOGOUT` is hidden when its role is in any entry, because a logout has no
   method or identity to match.
 - A `LOGIN_FAILED` is always published.
 
 Nothing is hidden by default, and the code knows no CloudNativePG role. The
 example [`config.yaml`](config.yaml) trusts `postgres` with `peer` and identity
-`postgres`, and `streaming_replica` with `cert` and identity
-`CN=streaming_replica`. So `postgres` logging in with a password from the
-network is published, and so is `streaming_replica` with another certificate.
+`postgres`, and `streaming_replica` with `cert` and common name
+`streaming_replica`. So `postgres` logging in with a password from the
+network is published, and so is `streaming_replica` with a certificate for
+another name.
+
+`common_name` is the name as it was typed when the certificate was made, such
+as `Smith, John`, and it is compared exactly, case and all. A certificate with
+no CN or with more than one CN never matches. To make a certificate with a
+non-ASCII name with `openssl`, pass `-utf8`, or `openssl` stores the name
+wrongly and it no longer matches what you typed.
 
 A `LOGIN` whose CN and method are unknown cannot match an entry, so it is
 published, also for a trusted role. That can happen right after the Collector
@@ -135,7 +144,7 @@ Copy [`config.yaml`](config.yaml) and change:
       high_privilege_roles: [postgres, app_admin]
       trusted_connections:
         - {role: postgres, method: peer, identity: postgres}
-        - {role: streaming_replica, method: cert, identity: "CN=streaming_replica"}
+        - {role: streaming_replica, method: cert, common_name: streaming_replica}
   ```
 - the Kafka brokers and topic, the registry URLs and subject, and the
   certificate paths
@@ -146,7 +155,7 @@ Copy [`config.yaml`](config.yaml) and change:
 ## Run
 
 The image is `ghcr.io/djosh34/cnpg-to-kafka`. Use a version tag such as
-`v0.3.0`. It holds one static binary for linux/amd64 and nothing else, so it has
+`v0.4.0`. It holds one static binary for linux/amd64 and nothing else, so it has
 no CA certificates and no shell. It reads `/etc/cnpg-to-kafka/config.yaml`
 unless you pass `--config`.
 
