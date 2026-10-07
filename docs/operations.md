@@ -45,49 +45,103 @@ also when a public certificate authority signed their certificates.
 
 ## Settings in config.yaml
 
+[`config.yaml`](../config.yaml) is a complete example. These are all the
+settings in it.
+
+### Receiver `file_log/cnpg`
+
 | Setting | Meaning |
 |---|---|
-| `receivers.file_log/cnpg.include` | The pod logs to read. `database_*` selects the namespace `database`. |
-| `exporters.kafka/cnpg.brokers` | The Kafka brokers. |
-| `exporters.kafka/cnpg.logs.topic` | The topic. It must exist. |
-| `exporters.kafka/cnpg.tls` | Certificates for Kafka. |
-| `processors.avro.registry.urls` | The Schema Registry URLs, tried in order. |
-| `processors.avro.registry.subject` | The subject that holds the event schema. |
-| `processors.avro.registry.version` | `latest` or a version number. The default is `latest`. |
-| `processors.avro.registry.request_timeout` | Time limit for one request to one URL. The default is 10 seconds. |
-| `processors.avro.registry.tls` | Certificates for the registry. |
-| `extensions.file_storage.directory` | The state directory. |
+| `include` | The pod logs to read, `/var/log/pods/<namespace>_<pod>_<uid>/<container>/<n>.log`. `database_*` reads every pod of the namespace `database`. Other containers and lines that are not PostgreSQL records are dropped by the cnpg processor. |
+| `exclude` | Skips the kubelet's compressed rotated logs. |
+| `start_at` | `beginning`, so that a new file is read from its first line. |
+| `include_file_path` | Adds the file path to each record. The `container` operator takes the namespace and pod name from it. |
+| `storage` | Saves read positions in `file_storage`. |
+| `max_log_size` | The longest log line. A longer one is cut. |
+| `max_concurrent_files` | `1`. Reads one file at a time. Collector v0.162 has a data race when it reads several, and the session join needs one file at a time. Keep it at 1. |
+| `poll_interval` | How often to look for new lines. |
+| `retry_on_failure` | Retries a batch that the pipeline did not accept, without a time limit. |
+| `operators` | Only `container`, which parses the container runtime's line format and sets the namespace and pod name. Keep it as it is. |
 
-Only `urls` and `subject` are required for the processor. The receiver, the
-exporter and the extension are the upstream ones, and their own documentation
-lists every setting:
+### Processor `cnpg`
+
+| Setting | Meaning |
+|---|---|
+| `source_hostname` | Required. The host name of the database, put in `hostdata.source_hostname`. It is looked up once at startup, and the first address goes in `hostdata.source_ip`. The Collector does not start if the lookup fails. |
+| `additional_fields.application_name` | Put in `application_name` on every event. |
+| `high_privilege_roles` | Roles whose events have `account_type` `ha`. Every other role is `npa`. The match is exact and case-sensitive. |
+| `trusted_connections` | A list of `{role, method, identity}`. All three are required. A login is not published when all three match one entry exactly. A logout is not published when its role is in any entry. Failed logins are always published. The default is an empty list. |
+
+The identity of a trusted connection is what PostgreSQL logs in
+`connection authenticated: identity="..."`: the certificate subject for `cert`,
+the operating system user for `peer`, the role for a password method. For
+`trust`, PostgreSQL logs `user="..."` instead, and that is the identity.
+
+### Processor `avro`
+
+| Setting | Meaning |
+|---|---|
+| `registry.urls` | Required. The Schema Registry URLs, tried in order. |
+| `registry.subject` | Required. The subject that holds the event schema. |
+| `registry.version` | `latest` or a version number in quotes. The default is `latest`. |
+| `registry.request_timeout` | Time limit for one request to one URL. The default is 10 seconds. |
+| `registry.tls` | Certificates for the registry. |
+
+### Exporter `kafka/cnpg`
+
+| Setting | Meaning |
+|---|---|
+| `brokers` | The Kafka brokers. |
+| `client_id` | The client ID that Kafka sees. |
+| `logs.topic` | The topic. It must exist. |
+| `logs.encoding` | `raw`. Sends the Avro message that the avro processor made. Keep it. |
+| `tls` | Certificates for Kafka. |
+| `producer.required_acks` | `all`. Waits for all in-sync replicas, and makes the producer idempotent. |
+| `producer.allow_auto_topic_creation` | `false`, so a typo in the topic does not create a topic. |
+| `timeout` | Time limit for one produce request. |
+| `retry_on_failure` | Retries without a time limit. |
+| `sending_queue` | The queue of unsent events, on `file_storage`. It holds 64 MiB of events and blocks the receiver when full. `num_consumers: 1` keeps the order. |
+
+### Extension `file_storage`
+
+| Setting | Meaning |
+|---|---|
+| `directory` | The state directory for read positions and the queue. |
+| `create_directory`, `directory_permissions` | Creates it with mode 0700. |
+| `fsync` | Writes to disk before it reports success. |
+| `max_size` | The limit for each of its two database files. |
+
+### Service
+
+`service.pipelines.logs` connects the components: `file_log/cnpg`, then
+`cnpg` and `avro`, then `kafka/cnpg`. `service.telemetry.logs.level` sets the
+Collector's own log level, and `metrics.level: none` turns its metrics off.
+
+The receiver, the exporter and the extension are the upstream ones, and their
+own documentation lists every setting:
 [file log receiver](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/receiver/filelogreceiver/README.md),
 [Kafka exporter](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/exporter/kafkaexporter/README.md),
 [file storage](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/extension/storage/filestorage/README.md).
 
-## Tune the event rules
+## Change what is published
 
-The rules that turn log lines into events are the `operators` of the receiver in
-`config.yaml`. They run in order.
+The rules that make events are Go code in `internal/event`. The config changes
+which events are published:
 
-| Operator | What to change |
-|---|---|
-| `select-pods` | The regex decides which pods in the namespace count. `.*` takes all of them. `^pg-main-[0-9]+$` takes the instances of the cluster `pg-main` and skips its job pods. |
-| `classify` | Decides the event type. A FATAL record with SQLSTATE `28P01` or `28000` is a failed login. So is one with `42501` and a message that starts with `permission denied for database`. A message that starts with `connection authorized:` or `replication connection authorized:` is a login. One that starts with `disconnection:` is a logout. Every other record is dropped. |
-| `excluded-roles` | The roles whose logins and logouts are not published. The match is exact and case-sensitive. Failed logins are always published. |
-| `role`, `database`, `client` | Copy the role, the database and the client address from the record. |
-| `client-with-port` | Removes the port from the client address. |
+- To hide another connection that your platform makes, add its role, method and
+  identity to `trusted_connections`. Its logouts are then hidden too.
+- To mark another role as high-privilege, add it to `high_privilege_roles`.
 
-The processor drops a login or logout that has no role or no client address,
-and logs that at debug level.
-
-`TestEventRules` in `cmd/collector/main_test.go` runs hand-written log lines
-through these operators. After a change to the rules, add a line for it and run
-`go test ./cmd/collector`.
+A `LOGIN` with a null CN and method is published even when its role is trusted,
+because it cannot match. That happens when the `connection authenticated` record
+was not read before the `connection ready` record: on the first read of a node's
+logs, when a rotated file is read after the new one, or after a restart of the
+Collector between the two records. [design.md](design.md#the-session-join) has
+the details.
 
 To publish different fields, change the schema, the `Event` struct in
-`processor/avroprocessor/event.go`, the attribute mapping in `factory.go` and
-the operators together.
+`internal/event/event.go`, its attributes in `internal/event/attributes.go`
+and the rules together. The tests in `internal/event` show each rule.
 
 ## Schema Registry
 
@@ -153,6 +207,7 @@ the events that are saved in the queue.
 
 ## Logs
 
-The Collector logs to standard error. Set `service.telemetry.logs.level` to
-`debug` to see the lines that failed to parse and the records that the processor
-dropped.
+The Collector logs to standard error. The cnpg processor logs a warning when it
+drops a connection event because its `log_time` does not parse, and the avro
+processor when it drops an event that the schema cannot encode. Set
+`service.telemetry.logs.level` to `debug` to see what the receiver reads.
