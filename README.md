@@ -69,8 +69,8 @@ connection, `connection authenticated`. The cnpg processor remembers them for
 the next records of that pod and puts them on the `LOGIN` or `LOGIN_FAILED`
 that follows. [docs/design.md](docs/design.md#the-session-join) explains how.
 A `LOGOUT` always has a null CN and method, because PostgreSQL does not log them
-at the end of a session. A failed password login has a null CN, and its method comes
-from the pg_hba rule that PostgreSQL quotes in the record.
+at the end of a session. A failed password login has a null CN, and its method
+comes from the pg_hba rule that PostgreSQL quotes in the record.
 
 ### Which events are hidden
 
