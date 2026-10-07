@@ -33,7 +33,7 @@ attributes. Everything else is Go:
 |---|---|
 | `internal/cnpg` | Parses one CloudNativePG JSON line into a typed `Record`. |
 | `internal/event` | The `Event` type, the rules, the session table, and the hand-off through log record attributes. |
-| `processor/cnpgprocessor` | Runs the rules on each log record and its config. |
+| `processor/cnpgprocessor` | Holds the config and runs the rules on each log record. |
 | `processor/avroprocessor` | Encodes each `Event` and looks up the schema. |
 
 An earlier version had the rules as expressions in the receiver's operators in
@@ -91,9 +91,9 @@ joins the records of one connection:
 - `connection ready` or any FATAL of the same session takes the entry and
   removes it. That includes a FATAL that is not published, such as `53300`.
 - Every later PostgreSQL record of the pod counts each of that pod's entries
-  down by one, from 1000. An entry at zero is removed and nothing is published
-  for it. This removes the entries of connections whose last record never
-  arrives, without a timer.
+  down by one, from 1000. An entry at zero is removed. This removes the
+  entries of connections whose last record never arrives, without a timer. A
+  `connection ready` that still comes later is published without join data.
 
 A connection setup takes a few milliseconds, so an entry normally lives for a
 few records. There is one table per pod, as a field of the processor. The
@@ -124,9 +124,9 @@ publishing.
 A failed password login has no `connection authenticated` record. Its method
 comes from the `detail` of the FATAL, which quotes the matched pg_hba rule:
 field 4 of a `local` rule, or for a `host*` rule the field after the address
-(after the separate netmask, if there is one). It counts only when it is a
-PostgreSQL 18 method name. A role named `cert` in `host all cert all
-scram-sha-256` is therefore not taken for the method.
+(after the separate netmask, if there is one). So a role named `cert` in
+`host all cert all scram-sha-256` is not taken for the method. The field counts
+only when it is a PostgreSQL 18 method name.
 
 ## Trusted connections
 
@@ -153,7 +153,7 @@ identity. The example `config.yaml` has the two entries CloudNativePG needs.
 
 ## Avro framing and the schema lookup
 
-The cnpg processor's last step is an `Event`. It writes the event into the log
+The cnpg processor ends with an `Event`. It writes the event into the log
 record's attributes, and the avro processor reads it back into the same `Event`
 type. That round trip is the only untyped step between the two processors, and a
 table test covers every field, set and empty.
@@ -275,7 +275,7 @@ Where the tests check Kafka messages, each value must start with a zero byte and
 the schema ID, and the rest must decode with the schema using plain
 `avro.Unmarshal`. The Avro library's `Unmarshal` accepts a payload that ends
 early, so the tests also compare the bytes with `avro.Marshal` of the expected
-event.
+event, or in `TestRecording` of the decoded one.
 
 Lines that the recording has are copied from it. Cases that it does not have, a
 certificate with the wrong CN and the failures after authentication, are
@@ -298,7 +298,7 @@ between files is not fixed, so the order of the list is not compared.
 CloudNativePG cluster on k3s. For five minutes a script logged in with correct
 and wrong passwords, while the kubelet rotated the log files and one container
 restarted. The recording holds every file operation in the pod-log directory
-with its bytes and its time: create, append, rename, remove.
+with its bytes and its time: mkdir, create, append, rename, remove.
 
 The recording holds what PostgreSQL and the kubelet wrote, including the two
 failed-login records that one wrong password produces. Hand-written log lines
@@ -313,9 +313,9 @@ test.
 20 times faster than it happened and counts the events per role, type and
 method, which must equal the counts in
 [`testdata/capture/README.md`](../testdata/capture/README.md). Every `LOGIN`
-must carry its CN from the session table. Halfway through, Kafka stops for five
-seconds and comes back with its data, which shows that the queue settings hold
-events during an outage.
+must carry its CN and method from the session table. Five seconds in, Kafka
+stops for five seconds and comes back with its data, which shows that the queue
+settings hold events during an outage.
 
 The capture workflow makes a new recording. It is started by hand, because it
 installs k3s and runs for several minutes, and a new recording is only needed

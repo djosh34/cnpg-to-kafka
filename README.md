@@ -65,9 +65,9 @@ The schema is [`schema/connection-event.avsc`](schema/connection-event.avsc).
 - `LOGOUT` is PostgreSQL's `disconnection` record.
 
 PostgreSQL logs the CN and the method on an earlier record of the same
-connection, `connection authenticated`. The cnpg processor remembers them for a
-short while and puts them on the `LOGIN` or `LOGIN_FAILED` that follows.
-[docs/design.md](docs/design.md#the-session-join) explains how. A `LOGOUT`
+connection, `connection authenticated`. The cnpg processor remembers them for
+the next records of that pod and puts them on the `LOGIN` or `LOGIN_FAILED`
+that follows. [docs/design.md](docs/design.md#the-session-join) explains how. A `LOGOUT`
 always has a null CN and method, because PostgreSQL does not log them at the
 end of a session. A failed password login has a null CN, and its method comes
 from the pg_hba rule that PostgreSQL quotes in the record.
@@ -75,7 +75,7 @@ from the pg_hba rule that PostgreSQL quotes in the record.
 ### Which events are hidden
 
 CloudNativePG itself connects all the time: its instance manager as `postgres`
-over the unix socket about once a second, and the replicas as
+over the unix socket every second or two, and the replicas as
 `streaming_replica` with a certificate. The `trusted_connections` setting hides
 these.
 

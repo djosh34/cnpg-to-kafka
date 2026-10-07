@@ -61,7 +61,7 @@ settings in it.
 | `max_concurrent_files` | `1`. Reads one file at a time. Collector v0.162 has a data race when it reads several, and the session join needs one file at a time. Keep it at 1. |
 | `poll_interval` | How often to look for new lines. |
 | `retry_on_failure` | Retries a batch that the pipeline did not accept, without a time limit. |
-| `operators` | Only `container`, which parses the container runtime's line format and sets the namespace and pod name. Keep it as it is. |
+| `operators` | Only `container`, which parses the container runtime's line format and sets the namespace and pod name. `on_error: drop` drops a line it cannot parse. Keep it as it is. |
 
 ### Processor `cnpg`
 
@@ -113,9 +113,10 @@ the operating system user for `peer`, the role for a password method. For
 
 ### Service
 
-`service.pipelines.logs` connects the components: `file_log/cnpg`, then
-`cnpg` and `avro`, then `kafka/cnpg`. `service.telemetry.logs.level` sets the
-Collector's own log level, and `metrics.level: none` turns its metrics off.
+`service.extensions` starts `file_storage`. `service.pipelines.logs` connects
+the components: `file_log/cnpg`, then `cnpg` and `avro`, then `kafka/cnpg`.
+`service.telemetry.logs.level` sets the Collector's own log level, and
+`metrics.level: none` turns its metrics off.
 
 The receiver, the exporter and the extension are the upstream ones, and their
 own documentation lists every setting:

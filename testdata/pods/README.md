@@ -10,7 +10,7 @@ Most lines are copied from the recording in `../capture`:
   `pg_isready` check, logins and logouts of `included` and `excluded`, their
   wrong passwords, an unknown role, the end of a replica session, a new replica
   session and a checkpoint.
-- `cnpg-1-initdb/initdb`: the initdb job up to its first login, with lines
+- `cnpg-1-initdb/initdb`: the initdb job up to the end of its first session, with lines
   that are not PostgreSQL records.
 - `cnpg-1/bootstrap-controller` and `noise/noise`: unrelated containers.
   `noise` logs plain text.

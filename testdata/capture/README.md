@@ -21,8 +21,8 @@ without TLS. `included` and `excluded` are two ordinary roles, and both publish
 their logins and logouts. `included` has 3 more logins, which wrote enough log
 lines to rotate the files.
 
-The logs also hold about 200 logins per instance by `postgres` with `peer` and
-by `streaming_replica` with `cert`, several log rotations per instance, a
+The logs also hold about 200 logins per instance by `postgres` with `peer`, 30
+by `streaming_replica` with `cert` on the primary, several log rotations per instance, a
 restart of the `cnpg-2` container, and pods that log unrelated lines. The
 example `trusted_connections` hides those logins and their logouts. The
 `cnpg-1-initdb` job pod logs in 5 times as `postgres` with `trust`, which no

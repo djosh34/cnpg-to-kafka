@@ -96,20 +96,22 @@ func TestPodLogs(t *testing.T) {
 		},
 	}
 
-	values := p.values(t, len(want))
-	got := make([]event.Event, len(values))
-	for i, value := range values {
-		got[i] = p.decode(t, value)
+	var got []event.Event
+	var payloads [][]byte
+	for _, value := range p.values(t, len(want)) {
+		got = append(got, p.decode(t, value))
+		payloads = append(payloads, value[5:])
+	}
+	// Unmarshal accepts a payload that ends early, so compare the bytes too.
+	var wantPayloads [][]byte
+	for _, e := range want {
+		payload, err := avro.Marshal(p.schema, e)
+		require.NoError(t, err)
+		wantPayloads = append(wantPayloads, payload)
 	}
 	// Each pod log is read in order, but the order between files is not fixed.
 	assert.ElementsMatch(t, want, got)
-	for i, value := range values {
-		// Unmarshal accepts a payload that ends early, so compare the bytes too.
-		// ElementsMatch showed that got[i] is one of the expected events.
-		payload, err := avro.Marshal(p.schema, got[i])
-		require.NoError(t, err)
-		assert.Equal(t, payload, value[5:])
-	}
+	assert.ElementsMatch(t, wantPayloads, payloads)
 }
 
 // TestRecording replays the recorded CloudNativePG pod logs, with a Kafka outage
@@ -222,7 +224,6 @@ func startPipeline(t *testing.T, pods string) *pipeline {
 		"exporters::kafka/cnpg::brokers":      []any{"127.0.0.1:" + strconv.Itoa(p.kafkaPort)},
 		"exporters::kafka/cnpg::tls":          clientFiles,
 		"extensions::file_storage::directory": filepath.Join(dir, "state"),
-		"service::telemetry::logs::level":     "warn",
 	})))
 	// JSON is YAML, so the Collector reads this file like any config file.
 	data, err := json.Marshal(conf.ToStringMap())
@@ -347,7 +348,7 @@ func testCertificate(t *testing.T, dir string) (clientFiles map[string]any, serv
 	pair, err := tls.X509KeyPair(certPEM, keyPEM)
 	require.NoError(t, err)
 	pool := x509.NewCertPool()
-	pool.AppendCertsFromPEM(certPEM)
+	require.True(t, pool.AppendCertsFromPEM(certPEM))
 	clientFiles = map[string]any{"ca_file": certFile, "cert_file": certFile, "key_file": keyFile}
 	server = &tls.Config{Certificates: []tls.Certificate{pair}, ClientCAs: pool, ClientAuth: tls.RequireAndVerifyClientCert}
 	client = &tls.Config{Certificates: []tls.Certificate{pair}, RootCAs: pool}
