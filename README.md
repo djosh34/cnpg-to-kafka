@@ -146,7 +146,7 @@ Copy [`config.yaml`](config.yaml) and change:
 ## Run
 
 The image is `ghcr.io/djosh34/cnpg-to-kafka`. Use a version tag such as
-`v0.2.0`. It holds one static binary for linux/amd64 and nothing else, so it has
+`v0.3.0`. It holds one static binary for linux/amd64 and nothing else, so it has
 no CA certificates and no shell. It reads `/etc/cnpg-to-kafka/config.yaml`
 unless you pass `--config`.
 
