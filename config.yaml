@@ -36,11 +36,12 @@ processors:
     # The account type is ha for these roles, exact match, and npa otherwise.
     high_privilege_roles: [postgres, app_admin]
     # A login is not published when role, method and identity all match an
-    # entry. A logout is not published when its role is in any entry. Failed
-    # logins are always published.
+    # entry. A cert entry has common_name, the common name of the certificate,
+    # in place of identity. A logout is not published when its role is in any
+    # entry. Failed logins are always published.
     trusted_connections:
       - {role: postgres, method: peer, identity: postgres}
-      - {role: streaming_replica, method: cert, identity: "CN=streaming_replica"}
+      - {role: streaming_replica, method: cert, common_name: streaming_replica}
   avro:
     registry:
       urls: [https://registry-1.example.com:8081, https://registry-2.example.com:8081]

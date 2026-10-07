@@ -45,10 +45,10 @@ func TestConfig(t *testing.T) {
 			error: "high_privilege_role",
 		},
 		{
-			name:  "trusted connection without identity",
-			old:   `, identity: "CN=streaming_replica"}`,
-			new:   "}",
-			error: "trusted_connections[1] requires role, method and identity",
+			name:  "cert connection with identity",
+			old:   "common_name: streaming_replica}",
+			new:   `identity: "CN=streaming_replica"}`,
+			error: "trusted_connections[1] has method cert, so it requires common_name and no identity",
 		},
 	}
 	for _, c := range cases {

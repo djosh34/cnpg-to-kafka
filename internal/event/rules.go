@@ -1,6 +1,7 @@
 package event
 
 import (
+	"encoding/hex"
 	"net/netip"
 	"regexp"
 	"slices"
@@ -20,12 +21,14 @@ type Rules struct {
 	TrustedConnections []TrustedConnection
 }
 
-// TrustedConnection is a login that is not published. All three fields must
-// match exactly.
+// TrustedConnection is a login that is not published. A cert entry has a
+// CommonName and no Identity, any other entry an Identity and no CommonName.
+// All fields must match exactly.
 type TrustedConnection struct {
-	Role     string `mapstructure:"role"`
-	Method   string `mapstructure:"method"`
-	Identity string `mapstructure:"identity"`
+	Role       string `mapstructure:"role"`
+	Method     string `mapstructure:"method"`
+	Identity   string `mapstructure:"identity"`
+	CommonName string `mapstructure:"common_name"`
 }
 
 // Make applies one PostgreSQL record of a pod to the session table and returns
@@ -218,8 +221,13 @@ func (r Rules) AccountType(role string) string {
 }
 
 // Trusted reports whether a login matches a trusted connection on role, method
-// and identity.
+// and identity. For cert, the common name of the identity is matched in place
+// of the identity.
 func (r Rules) Trusted(role string, auth Auth) bool {
+	if auth.Method == "cert" {
+		name, ok := CommonName(auth.Identity)
+		return ok && slices.Contains(r.TrustedConnections, TrustedConnection{Role: role, Method: auth.Method, CommonName: name})
+	}
 	return slices.Contains(r.TrustedConnections, TrustedConnection{Role: role, Method: auth.Method, Identity: auth.Identity})
 }
 
@@ -227,4 +235,49 @@ func (r Rules) Trusted(role string, auth Auth) bool {
 // has no method and identity, so only its role is matched.
 func (r Rules) TrustedRole(role string) bool {
 	return slices.ContainsFunc(r.TrustedConnections, func(c TrustedConnection) bool { return c.Role == role })
+}
+
+// CommonName returns the common name of a certificate subject as PostgreSQL
+// logs it, in RFC 2253 form such as "CN=app,OU=Databases,O=Example Corp". Its
+// escapes are undone, so it is the name as typed when the certificate was
+// made. It reports false when the subject has no CN, more than one CN, or a
+// broken escape.
+func CommonName(subject string) (string, bool) {
+	// Split at unescaped , between parts and + inside a multi-valued part, and
+	// undo the escapes. A backslash and two hex digits are one byte of UTF-8,
+	// a backslash and any other character is that character.
+	var attributes []string
+	var attribute []byte
+	for i := 0; i < len(subject); i++ {
+		switch c := subject[i]; c {
+		case ',', '+':
+			attributes = append(attributes, string(attribute))
+			attribute = nil
+		case '\\':
+			if i+1 == len(subject) {
+				return "", false
+			}
+			if b, err := hex.DecodeString(subject[i+1 : min(i+3, len(subject))]); err == nil {
+				attribute = append(attribute, b[0])
+				i += 2
+			} else {
+				attribute = append(attribute, subject[i+1])
+				i++
+			}
+		default:
+			attribute = append(attribute, c)
+		}
+	}
+	attributes = append(attributes, string(attribute))
+
+	var names []string
+	for _, a := range attributes {
+		if name, ok := strings.CutPrefix(a, "CN="); ok {
+			names = append(names, name)
+		}
+	}
+	if len(names) != 1 {
+		return "", false
+	}
+	return names[0], true
 }
