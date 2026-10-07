@@ -19,7 +19,7 @@ var testRules = Rules{
 	HighPrivilegeRoles: []string{"postgres", "app_admin"},
 	TrustedConnections: []TrustedConnection{
 		{Role: "postgres", Method: "peer", Identity: "postgres"},
-		{Role: "streaming_replica", Method: "cert", Identity: "CN=streaming_replica"},
+		{Role: "streaming_replica", Method: "cert", CommonName: "streaming_replica"},
 	},
 }
 
@@ -352,9 +352,19 @@ func TestTrusted(t *testing.T) {
 		trustedRole bool
 	}{
 		{"instance manager", "postgres", Auth{"postgres", "peer"}, true, true},
+		{"instance manager with another identity", "postgres", Auth{"app", "peer"}, false, true},
+		{"instance manager with a subject", "postgres", Auth{"CN=postgres", "peer"}, false, true},
 		{"replica", "streaming_replica", Auth{"CN=streaming_replica", "cert"}, true, true},
+		{"replica with OU and O", "streaming_replica", Auth{"CN=streaming_replica,OU=Databases,O=Example Corp", "cert"}, true, true},
+		{"replica in a multi-valued part", "streaming_replica", Auth{"CN=streaming_replica+OU=Databases", "cert"}, true, true},
+		{"replica with another CN", "streaming_replica", Auth{"CN=mallory,OU=Databases", "cert"}, false, true},
+		{"replica with the CN in another field", "streaming_replica", Auth{"CN=mallory,OU=streaming_replica", "cert"}, false, true},
+		{"replica with two CNs", "streaming_replica", Auth{"CN=streaming_replica,CN=streaming_replica", "cert"}, false, true},
+		{"replica without a CN", "streaming_replica", Auth{"OU=streaming_replica", "cert"}, false, true},
+		{"replica with a CN of another case", "streaming_replica", Auth{"CN=Streaming_replica", "cert"}, false, true},
+		{"replica with the identity of a peer entry", "streaming_replica", Auth{"streaming_replica", "peer"}, false, true},
 		{"postgres with a password", "postgres", Auth{"postgres", "scram-sha-256"}, false, true},
-		{"replica with another subject", "streaming_replica", Auth{"CN=streaming_replica,O=Other", "cert"}, false, true},
+		{"postgres with a certificate", "postgres", Auth{"CN=postgres", "cert"}, false, true},
 		{"identity of another entry", "postgres", Auth{"CN=streaming_replica", "cert"}, false, true},
 		{"other role", "included", Auth{"included", "scram-sha-256"}, false, false},
 		{"case differs", "Postgres", Auth{"postgres", "peer"}, false, false},
@@ -363,6 +373,43 @@ func TestTrusted(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			assert.Equal(t, c.trusted, testRules.Trusted(c.role, c.auth))
 			assert.Equal(t, c.trustedRole, testRules.TrustedRole(c.role))
+		})
+	}
+}
+
+func TestCommonName(t *testing.T) {
+	cases := []struct {
+		subject string
+		want    string
+		ok      bool
+	}{
+		// The identities PostgreSQL 18 logged for test certificates.
+		{`CN=streaming_replica`, "streaming_replica", true},
+		{`CN=streaming_replica,OU=Databases,O=Example Corp`, "streaming_replica", true},
+		{`CN=Smith\, John`, "Smith, John", true},
+		{`CN=a\+b=c\;d\<e\>f\"g\\h`, `a+b=c;d<e>f"g\h`, true},
+		{`CN=\ lead and trail\ `, " lead and trail ", true},
+		{`CN=\#hash`, "#hash", true},
+		{`CN=J\C3\B6hn \C3\9Cn\C3\AFcode \C3\A9`, "Jöhn Ünïcode é", true},
+		{`CN=J\C3\B6hn\, Smith\+Co,OU=Databases,O=Example Corp`, "Jöhn, Smith+Co", true},
+		{`CN=J\C3\83\C2\B6hn \C3\83\C2\A9`, "JÃ¶hn Ã©", true},
+
+		// A multi-valued part, an empty CN, and subjects that report false.
+		{`CN=multi+OU=val`, "multi", true},
+		{`OU=val+CN=multi,O=Example Corp`, "multi", true},
+		{`CN=`, "", true},
+		{`CN=second,CN=first`, "", false},
+		{`CN=one+CN=two`, "", false},
+		{`OU=Databases,O=Example Corp`, "", false},
+		{`O=a\,CN=b`, "", false},
+		{``, "", false},
+		{`CN=broken\`, "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.subject, func(t *testing.T) {
+			got, ok := CommonName(c.subject)
+			assert.Equal(t, c.ok, ok)
+			assert.Equal(t, c.want, got)
 		})
 	}
 }

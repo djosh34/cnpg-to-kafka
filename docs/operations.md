@@ -70,12 +70,30 @@ settings in it.
 | `source_hostname` | Required. The host name of the database, put in `hostdata.source_hostname`. It is looked up once at startup, and the first address goes in `hostdata.source_ip`. The Collector does not start if the lookup fails. |
 | `additional_fields.application_name` | Put in `application_name` on every event. |
 | `high_privilege_roles` | Roles whose events have `account_type` `ha`. Every other role is `npa`. The match is exact and case-sensitive. |
-| `trusted_connections` | A list of `{role, method, identity}`. All three are required. A login is not published when all three match one entry exactly. A logout is not published when its role is in any entry. Failed logins are always published. The default is an empty list. |
+| `trusted_connections` | A list of `{role, method, identity}`, or `{role, method: cert, common_name}` for a certificate login. A login is not published when it matches one entry exactly. A logout is not published when its role is in any entry. Failed logins are always published. The default is an empty list. |
+
+Every entry needs `role` and `method`. An entry with `method: cert` also needs
+`common_name` and must not have `identity`. An entry with any other method also
+needs `identity` and must not have `common_name`. The Collector does not start
+with any other combination, and its error names the entry.
 
 The identity of a trusted connection is what PostgreSQL logs in
-`connection authenticated: identity="..."`: the certificate subject for `cert`,
-the operating system user for `peer`, the role for a password method. For
-`trust`, PostgreSQL logs `user="..."` instead, and that is the identity.
+`connection authenticated: identity="..."`: the operating system user for
+`peer`, the role for a password method. For `trust`, PostgreSQL logs
+`user="..."` instead, and that is the identity.
+
+For `cert`, PostgreSQL logs the certificate subject, such as
+`CN=streaming_replica,OU=Databases,O=Example Corp`. A `cert` entry matches only
+the common name (CN) in it, so `common_name: streaming_replica` matches that
+subject whatever its OU and O are. The common name is compared after
+PostgreSQL's escapes are undone, so it is the name as it was typed when the
+certificate was made: `common_name: "Smith, John"` matches the logged
+`CN=Smith\, John`. The match is exact and case-sensitive. A subject with no CN
+or with more than one CN matches no entry, so its login is published.
+
+To make a certificate with a non-ASCII common name, pass `-utf8` to
+`openssl req`. Without it `openssl` stores the name wrongly in the certificate,
+and it does not match what you typed.
 
 ### Processor `avro`
 
@@ -130,7 +148,8 @@ The rules that make events are Go code in `internal/event`. The config changes
 which events are published:
 
 - To hide another connection that your platform makes, add its role, method and
-  identity to `trusted_connections`. Its logouts are then hidden too.
+  identity to `trusted_connections`, or its role, `method: cert` and common name
+  for a certificate login. Its logouts are then hidden too.
 - To mark another role as high-privilege, add it to `high_privilege_roles`.
 
 A `LOGIN` with a null CN and method is published even when its role is trusted,

@@ -33,7 +33,7 @@ func config() *cnpgprocessor.Config {
 		HighPrivilegeRoles: []string{"postgres", "app_admin"},
 		TrustedConnections: []event.TrustedConnection{
 			{Role: "postgres", Method: "peer", Identity: "postgres"},
-			{Role: "streaming_replica", Method: "cert", Identity: "CN=streaming_replica"},
+			{Role: "streaming_replica", Method: "cert", CommonName: "streaming_replica"},
 		},
 	}
 }
@@ -311,9 +311,41 @@ func TestValidate(t *testing.T) {
 		{"example", func(*cnpgprocessor.Config) {}, ""},
 		{"no trusted connections", func(c *cnpgprocessor.Config) { c.TrustedConnections = nil }, ""},
 		{"no source hostname", func(c *cnpgprocessor.Config) { c.SourceHostname = "" }, "source_hostname is required"},
-		{"trusted connection without identity", func(c *cnpgprocessor.Config) {
-			c.TrustedConnections[1].Identity = ""
-		}, "trusted_connections[1] requires role, method and identity"},
+		{"other methods are not checked", func(c *cnpgprocessor.Config) {
+			c.TrustedConnections = []event.TrustedConnection{
+				{Role: "app", Method: "scram-sha-256", Identity: "app"},
+				{Role: "app", Method: "made-up", Identity: "app"},
+			}
+		}, ""},
+		{"no role", func(c *cnpgprocessor.Config) {
+			c.TrustedConnections[0].Role = ""
+		}, "trusted_connections[0] requires role and method"},
+		{"no method", func(c *cnpgprocessor.Config) {
+			c.TrustedConnections[0].Method = ""
+		}, "trusted_connections[0] requires role and method"},
+		{"cert with identity in place of common_name", func(c *cnpgprocessor.Config) {
+			c.TrustedConnections[1] = event.TrustedConnection{Role: "streaming_replica", Method: "cert", Identity: "CN=streaming_replica"}
+		}, "trusted_connections[1] has method cert, so it requires common_name and no identity"},
+		{"cert with identity and common_name", func(c *cnpgprocessor.Config) {
+			c.TrustedConnections[1].Identity = "CN=streaming_replica"
+		}, "trusted_connections[1] has method cert, so it requires common_name and no identity"},
+		{"cert without identity and common_name", func(c *cnpgprocessor.Config) {
+			c.TrustedConnections[1].CommonName = ""
+		}, "trusted_connections[1] has method cert, so it requires common_name and no identity"},
+		{"peer with common_name in place of identity", func(c *cnpgprocessor.Config) {
+			c.TrustedConnections[0] = event.TrustedConnection{Role: "postgres", Method: "peer", CommonName: "postgres"}
+		}, "trusted_connections[0] has method peer, so it requires identity and no common_name"},
+		{"peer with identity and common_name", func(c *cnpgprocessor.Config) {
+			c.TrustedConnections[0].CommonName = "postgres"
+		}, "trusted_connections[0] has method peer, so it requires identity and no common_name"},
+		{"peer without identity and common_name", func(c *cnpgprocessor.Config) {
+			c.TrustedConnections[0].Identity = ""
+		}, "trusted_connections[0] has method peer, so it requires identity and no common_name"},
+		{"every wrong entry", func(c *cnpgprocessor.Config) {
+			c.TrustedConnections[0].Identity = ""
+			c.TrustedConnections[1].Identity = "CN=streaming_replica"
+		}, "trusted_connections[0] has method peer, so it requires identity and no common_name\n" +
+			"trusted_connections[1] has method cert, so it requires common_name and no identity"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
