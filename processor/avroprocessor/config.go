@@ -1,4 +1,4 @@
-// Package avroprocessor encodes connection-event log records as Avro.
+// Package avroprocessor encodes the connection events in log records as Avro.
 package avroprocessor
 
 import (
@@ -24,6 +24,7 @@ type RegistryConfig struct {
 	TLS            configtls.ClientConfig `mapstructure:"tls"`
 }
 
+// Validate checks the configuration when the Collector starts.
 func (c *Config) Validate() error {
 	if len(c.Registry.URLs) == 0 || c.Registry.Subject == "" {
 		return errors.New("registry requires urls and subject")

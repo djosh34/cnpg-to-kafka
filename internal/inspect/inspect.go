@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/collector/confmap/provider/envprovider"
 	"go.opentelemetry.io/collector/confmap/provider/fileprovider"
 
+	"github.com/djosh34/cnpg-to-kafka/internal/event"
 	"github.com/djosh34/cnpg-to-kafka/processor/avroprocessor"
 )
 
@@ -37,7 +38,7 @@ func Run(ctx context.Context, configPath string, out io.Writer, limit int) error
 	if kafka.TLS != nil {
 		tlsConfig, err := kafka.TLS.LoadTLSConfig(ctx)
 		if err != nil {
-			return fmt.Errorf("Kafka TLS: %w", err)
+			return fmt.Errorf("TLS for Kafka: %w", err)
 		}
 		if tlsConfig != nil {
 			opts = append(opts, kgo.DialTLSConfig(tlsConfig))
@@ -67,14 +68,14 @@ func Run(ctx context.Context, configPath string, out io.Writer, limit int) error
 			return err
 		}
 		if errs := fetches.Errors(); len(errs) > 0 {
-			return fmt.Errorf("Kafka fetch: %w", errs[0].Err)
+			return fmt.Errorf("fetch from Kafka: %w", errs[0].Err)
 		}
 		for iter := fetches.RecordIter(); !iter.Done(); {
 			record := iter.Next()
-			var event avroprocessor.Event
+			var e event.Event
 			var failures []error
 			for _, decoder := range decoders {
-				err := decoder.Decode(ctx, record.Value, &event)
+				err := decoder.Decode(ctx, record.Value, &e)
 				if err == nil {
 					failures = nil
 					break
@@ -84,7 +85,7 @@ func Run(ctx context.Context, configPath string, out io.Writer, limit int) error
 			if len(failures) > 0 {
 				return fmt.Errorf("decode offset %d of partition %d: %w", record.Offset, record.Partition, errors.Join(failures...))
 			}
-			if err := encoder.Encode(event); err != nil {
+			if err := encoder.Encode(e); err != nil {
 				return err
 			}
 			if count++; count == limit {
@@ -116,9 +117,8 @@ func loadConfig(ctx context.Context, path string) (configkafka.ClientConfig, str
 	if err != nil {
 		return fail(err)
 	}
-	defer resolver.Shutdown(context.Background())
 	cfg, err := resolver.Resolve(ctx)
-	if err != nil {
+	if err := errors.Join(err, resolver.Shutdown(ctx)); err != nil {
 		return fail(err)
 	}
 	avroConf, err := cfg.Sub("processors::avro")
