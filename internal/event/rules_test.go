@@ -268,6 +268,8 @@ func TestHBAMethod(t *testing.T) {
 		{"database named like a method", matched("local trust peer reject"), new("reject")},
 		{"quoted name with a space", matched(`host "my db" all all md5`), new("md5")},
 		{"list with spaces", matched("host all app, reader all scram-sha-256"), new("scram-sha-256")},
+		{"list with two spaces", matched("host all app,  reader all scram-sha-256"), new("scram-sha-256")},
+		{"list with a tab and a database named like a method", matched("local all app,\t peer trust"), new("trust")},
 		{"list with spaces and a role named like a method", matched("host all app, reader, cert all scram-sha-256"), new("scram-sha-256")},
 		{"quoted method", matched(`host all all all "scram-sha-256"`), new("scram-sha-256")},
 		{"trailing comment", matched("local all all peer # instance manager"), new("peer")},

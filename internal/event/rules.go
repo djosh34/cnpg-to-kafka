@@ -170,7 +170,7 @@ func hbaFields(rule string) []string {
 		}
 		separator := !quoted && unicode.IsSpace(r)
 		switch {
-		case separator && start >= 0 && rule[i-1] != ',':
+		case separator && start >= 0 && !strings.HasSuffix(strings.TrimRightFunc(rule[start:i], unicode.IsSpace), ","):
 			fields = append(fields, rule[start:i])
 			start = -1
 		case !separator && start < 0:
