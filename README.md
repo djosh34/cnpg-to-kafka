@@ -100,7 +100,7 @@ no CN or with more than one CN never matches. To make a certificate with a
 non-ASCII name with `openssl`, pass `-utf8`, or `openssl` stores the name
 wrongly and it no longer matches what you typed.
 
-A `LOGIN` whose CN and method are unknown cannot match an entry, so it is
+A `LOGIN` whose `cn` and method are unknown cannot match an entry, so it is
 published, also for a trusted role. That can happen right after the Collector
 starts, see [docs/design.md](docs/design.md#the-session-join).
 

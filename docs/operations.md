@@ -85,15 +85,15 @@ The identity of a trusted connection is what PostgreSQL logs in
 For `cert`, PostgreSQL logs the certificate subject, such as
 `CN=streaming_replica,OU=Databases,O=Example Corp`. A `cert` entry matches only
 the common name (CN) in it, so `common_name: streaming_replica` matches that
-subject whatever its OU and O are. The common name is compared after PostgreSQL's
-escapes are undone, so it is the name as it was typed when the certificate was
-made: `common_name: "Smith, John"` matches the logged `CN=Smith\, John`. The
-match is exact and case-sensitive. A subject with no CN or with more than one CN
-matches no entry, so its login is published.
+subject whatever its OU and O are. The common name is compared after
+PostgreSQL's escapes are undone, so it is the name as it was typed when the
+certificate was made: `common_name: "Smith, John"` matches the logged
+`CN=Smith\, John`. The match is exact and case-sensitive. A subject with no CN
+or with more than one CN matches no entry, so its login is published.
 
-To make a certificate with a non-ASCII common name with `openssl`, pass
-`-utf8`, as in `openssl req -utf8 -subj "/CN=Jöhn"`. Without it `openssl` stores
-the name wrongly in the certificate, and it does not match what you typed.
+To make a certificate with a non-ASCII common name, pass `-utf8` to
+`openssl req`. Without it `openssl` stores the name wrongly in the certificate,
+and it does not match what you typed.
 
 ### Processor `avro`
 
