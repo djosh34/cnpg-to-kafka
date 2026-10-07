@@ -10,6 +10,7 @@ require (
 	github.com/open-telemetry/opentelemetry-collector-contrib/receiver/filelogreceiver v0.162.0
 	github.com/stretchr/testify v1.12.1
 	github.com/twmb/franz-go v1.22.0
+	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260421215025-4e7a1e1569ac
 	go.opentelemetry.io/collector/component v1.68.0
 	go.opentelemetry.io/collector/component/componenttest v0.162.0
 	go.opentelemetry.io/collector/config/configtls v1.68.0
@@ -18,6 +19,7 @@ require (
 	go.opentelemetry.io/collector/confmap/provider/fileprovider v1.68.0
 	go.opentelemetry.io/collector/consumer v1.68.0
 	go.opentelemetry.io/collector/exporter v1.68.0
+	go.opentelemetry.io/collector/exporter/exportertest v0.162.0
 	go.opentelemetry.io/collector/extension v1.68.0
 	go.opentelemetry.io/collector/featuregate v1.68.0
 	go.opentelemetry.io/collector/otelcol v0.162.0
@@ -144,7 +146,6 @@ require (
 	go.opentelemetry.io/collector/consumer/xconsumer v0.162.0 // indirect
 	go.opentelemetry.io/collector/exporter/exporterhelper v0.162.0 // indirect
 	go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper v0.162.0 // indirect
-	go.opentelemetry.io/collector/exporter/exportertest v0.162.0 // indirect
 	go.opentelemetry.io/collector/exporter/xexporter v0.162.0 // indirect
 	go.opentelemetry.io/collector/extension/extensionauth v1.68.0 // indirect
 	go.opentelemetry.io/collector/extension/extensioncapabilities v0.162.0 // indirect

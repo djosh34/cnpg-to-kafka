@@ -67,19 +67,12 @@ func TestEncode(t *testing.T) {
 	}
 }
 
-// start starts the processor with the given registry URLs. The returned
-// function sends one batch through it and returns what comes out.
-func start(t *testing.T, urls ...string) (func(plog.Logs) plog.Logs, error) {
+// startProcessor starts the processor with the given registry URLs.
+func startProcessor(t *testing.T, next consumer.Logs, urls ...string) (processor.Logs, error) {
 	t.Helper()
 	factory := avroprocessor.NewFactory()
 	cfg := factory.CreateDefaultConfig().(*avroprocessor.Config)
 	cfg.Registry.URLs, cfg.Registry.Subject = urls, "cnpg-connections-value"
-	var out plog.Logs
-	next, err := consumer.NewLogs(func(_ context.Context, logs plog.Logs) error {
-		out = logs
-		return nil
-	})
-	require.NoError(t, err)
 	settings := processor.Settings{ID: component.NewID(factory.Type()), TelemetrySettings: componenttest.NewNopTelemetrySettings()}
 	p, err := factory.CreateLogs(t.Context(), settings, cfg, next)
 	require.NoError(t, err)
@@ -87,6 +80,23 @@ func start(t *testing.T, urls ...string) (func(plog.Logs) plog.Logs, error) {
 		return nil, err
 	}
 	t.Cleanup(func() { assert.NoError(t, p.Shutdown(context.Background())) })
+	return p, nil
+}
+
+// start starts the processor with the given registry URLs. The returned
+// function sends one batch through it and returns what comes out.
+func start(t *testing.T, urls ...string) (func(plog.Logs) plog.Logs, error) {
+	t.Helper()
+	var out plog.Logs
+	next, err := consumer.NewLogs(func(_ context.Context, logs plog.Logs) error {
+		out = logs
+		return nil
+	})
+	require.NoError(t, err)
+	p, err := startProcessor(t, next, urls...)
+	if err != nil {
+		return nil, err
+	}
 	return func(in plog.Logs) plog.Logs {
 		require.NoError(t, p.ConsumeLogs(t.Context(), in))
 		return out
