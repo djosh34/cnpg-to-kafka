@@ -231,3 +231,29 @@ The Collector logs to standard error. The cnpg processor logs a warning when it
 drops a connection event because its `log_time` does not parse, and the avro
 processor when it drops an event that the schema cannot encode. Set
 `service.telemetry.logs.level` to `debug` to see what the receiver reads.
+
+To see each event as it leaves the processors, add the debug exporter to
+`config.yaml`:
+
+```yaml
+exporters:
+  debug:
+    verbosity: normal
+  kafka/cnpg:
+    ...
+service:
+  pipelines:
+    logs:
+      exporters: [kafka/cnpg, debug]
+```
+
+It writes to the Collector's log. For each batch it writes the number of events,
+a line for each pod, then one line for each event: the Avro body in base64,
+then the record's attributes as `key=value`. These are the event fields, which
+start with `cnpg.`, and the file the line came from. `verbosity: basic` writes
+only the number of events in each batch, and `detailed` writes every field of
+every record over many lines. It does not show whether Kafka received an event,
+and it does not show events that were already in the queue when you added it.
+Remove it again when you are done, because it logs every event. Its
+documentation lists every setting:
+[debug exporter](https://github.com/open-telemetry/opentelemetry-collector/blob/main/exporter/debugexporter/README.md).

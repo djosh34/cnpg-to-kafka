@@ -16,9 +16,10 @@ discovery, rotation, checkpoints, backpressure and shutdown. The Collector's
 weaker guarantee, described under [Delivery](#delivery), was accepted for that
 reason.
 
-The binary contains only what `config.yaml` uses: the file log receiver, the
-cnpg and avro processors from this repository, the Kafka exporter and the file
-storage extension. `cmd/collector/main.go` lists them. The full contrib
+The binary contains only what `config.yaml` uses, plus one exporter for
+troubleshooting: the file log receiver, the cnpg and avro processors from this
+repository, the Kafka exporter, the file storage extension and the debug
+exporter. `cmd/collector/main.go` lists them. The full contrib
 distribution has hundreds of components and a dependency list to match.
 
 The pipeline is `file_log/cnpg` to `cnpg` to `avro` to `kafka/cnpg`.

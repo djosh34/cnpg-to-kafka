@@ -6,7 +6,7 @@ for teams that run CloudNativePG on Kubernetes and want connection events in
 Kafka, for example for an audit trail.
 
 It is a build of the [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/)
-with five components:
+with six components:
 
 1. The file log receiver reads the pod logs on each node.
 2. The cnpg processor from this repository turns PostgreSQL's connection
@@ -15,6 +15,8 @@ with five components:
    schema from your Schema Registry.
 4. The Kafka exporter publishes it.
 5. The file storage extension keeps read positions and unsent events on disk.
+6. The debug exporter writes each event to the log when you turn it on. The
+   example config leaves it off.
 
 ## An event
 
@@ -155,7 +157,7 @@ Copy [`config.yaml`](config.yaml) and change:
 ## Run
 
 The image is `ghcr.io/djosh34/cnpg-to-kafka`. Use a version tag such as
-`v0.4.0`. It holds one static binary for linux/amd64 and nothing else, so it has
+`v0.4.1`. It holds one static binary for linux/amd64 and nothing else, so it has
 no CA certificates and no shell. It reads `/etc/cnpg-to-kafka/config.yaml`
 unless you pass `--config`.
 

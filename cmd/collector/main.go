@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/collector/confmap/provider/envprovider"
 	"go.opentelemetry.io/collector/confmap/provider/fileprovider"
 	"go.opentelemetry.io/collector/exporter"
+	"go.opentelemetry.io/collector/exporter/debugexporter"
 	"go.opentelemetry.io/collector/extension"
 	"go.opentelemetry.io/collector/featuregate"
 	"go.opentelemetry.io/collector/otelcol"
@@ -77,11 +78,12 @@ func factories() (otelcol.Factories, error) {
 	cnpg := cnpgprocessor.NewFactory()
 	avro := avroprocessor.NewFactory()
 	kafka := kafkaexporter.NewFactory()
+	debug := debugexporter.NewFactory()
 	storage := filestorage.NewFactory()
 	return otelcol.Factories{
 		Receivers:  receivers,
 		Processors: map[component.Type]processor.Factory{cnpg.Type(): cnpg, avro.Type(): avro},
-		Exporters:  map[component.Type]exporter.Factory{kafka.Type(): kafka},
+		Exporters:  map[component.Type]exporter.Factory{kafka.Type(): kafka, debug.Type(): debug},
 		Extensions: map[component.Type]extension.Factory{storage.Type(): storage},
 		Telemetry:  otelconftelemetry.NewFactory(),
 	}, nil
